@@ -28,6 +28,7 @@ if errorlevel 1 (
 
 set "COMMIT_MSG=%~1"
 if "%COMMIT_MSG%"=="" set "COMMIT_MSG=chore: update and deploy"
+set "VERCEL_SCOPE=martindasnoys-projects"
 
 for /f %%i in ('git rev-parse --abbrev-ref HEAD') do set "BRANCH=%%i"
 if "%BRANCH%"=="" set "BRANCH=main"
@@ -73,9 +74,9 @@ if errorlevel 1 (
 )
 
 if defined VERCEL_TOKEN (
-  npx vercel deploy --prod --yes --token "%VERCEL_TOKEN%"
+  npx vercel deploy --prod --yes --scope "%VERCEL_SCOPE%" --token "%VERCEL_TOKEN%"
 ) else (
-  npx vercel deploy --prod --yes
+  npx vercel deploy --prod --yes --scope "%VERCEL_SCOPE%"
 )
 
 if errorlevel 1 (
