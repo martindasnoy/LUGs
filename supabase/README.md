@@ -28,6 +28,10 @@
   - Adds join request notifications for LUG admins.
 - `supabase/migrations/0013_add_admin_pending_requests_rpc.sql`
   - Adds RPC for admins to read pending requests list.
+- `supabase/migrations/0014_extend_lug_join_requests.sql`
+  - Adds request message/social and status values `accepted`/`rejected`.
+- `supabase/migrations/0015_add_join_request_resolution_rpc.sql`
+  - Adds RPC for admin request detail and accept/reject actions.
 
 ## How to run in Supabase dashboard
 
@@ -45,6 +49,8 @@
 12. Run `0011_drop_profiles_lug_id.sql`.
 13. Run `0012_add_lug_join_requests.sql`.
 14. Run `0013_add_admin_pending_requests_rpc.sql`.
+15. Run `0014_extend_lug_join_requests.sql`.
+16. Run `0015_add_join_request_resolution_rpc.sql`.
 
 ## Notes
 

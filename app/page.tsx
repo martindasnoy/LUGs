@@ -37,9 +37,12 @@ type LugInfoItem = {
 type AdminJoinRequestItem = {
   request_id: string;
   requester_id: string;
+  lug_id: string;
   full_name: string;
   social_platform: string | null;
   social_handle: string | null;
+  request_message: string | null;
+  contact_social: string | null;
   created_at: string;
 };
 
@@ -119,6 +122,15 @@ export default function Home() {
   const [showAdminRequestsPanel, setShowAdminRequestsPanel] = useState(false);
   const [adminRequestsLoading, setAdminRequestsLoading] = useState(false);
   const [adminRequests, setAdminRequests] = useState<AdminJoinRequestItem[]>([]);
+  const [showJoinRequestFormPanel, setShowJoinRequestFormPanel] = useState(false);
+  const [joinRequestTargetLugId, setJoinRequestTargetLugId] = useState<string | null>(null);
+  const [joinRequestTargetLugName, setJoinRequestTargetLugName] = useState("");
+  const [joinRequestMessageInput, setJoinRequestMessageInput] = useState("");
+  const [joinRequestSocialInput, setJoinRequestSocialInput] = useState("");
+  const [joinRequestSending, setJoinRequestSending] = useState(false);
+  const [showAdminRequestDetailPanel, setShowAdminRequestDetailPanel] = useState(false);
+  const [selectedAdminRequest, setSelectedAdminRequest] = useState<AdminJoinRequestItem | null>(null);
+  const [adminDecisionLoading, setAdminDecisionLoading] = useState(false);
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -228,9 +240,12 @@ export default function Home() {
     const parsed = rows.map((row) => ({
       request_id: String(row.request_id ?? ""),
       requester_id: String(row.requester_id ?? ""),
+      lug_id: String(row.lug_id ?? ""),
       full_name: String(row.full_name ?? "Usuario"),
       social_platform: row.social_platform ? String(row.social_platform) : null,
       social_handle: row.social_handle ? String(row.social_handle) : null,
+      request_message: row.request_message ? String(row.request_message) : null,
+      contact_social: row.contact_social ? String(row.contact_social) : null,
       created_at: String(row.created_at ?? ""),
     }));
 
@@ -324,6 +339,13 @@ export default function Home() {
         setAdminPendingRequestsCount(0);
         setShowAdminRequestsPanel(false);
         setAdminRequests([]);
+        setShowJoinRequestFormPanel(false);
+        setJoinRequestTargetLugId(null);
+        setJoinRequestTargetLugName("");
+        setJoinRequestMessageInput("");
+        setJoinRequestSocialInput("");
+        setShowAdminRequestDetailPanel(false);
+        setSelectedAdminRequest(null);
       }
     };
 
@@ -345,6 +367,13 @@ export default function Home() {
         setAdminPendingRequestsCount(0);
         setShowAdminRequestsPanel(false);
         setAdminRequests([]);
+        setShowJoinRequestFormPanel(false);
+        setJoinRequestTargetLugId(null);
+        setJoinRequestTargetLugName("");
+        setJoinRequestMessageInput("");
+        setJoinRequestSocialInput("");
+        setShowAdminRequestDetailPanel(false);
+        setSelectedAdminRequest(null);
       }
     });
 
@@ -366,8 +395,12 @@ export default function Home() {
           table: "lug_join_requests",
           filter: `requester_id=eq.${userId}`,
         },
-        () => {
+        (payload: { eventType: string; new?: { status?: string } }) => {
           void loadMyJoinRequests(userId);
+          const maybeStatus = String(payload.new?.status ?? "");
+          if (payload.eventType === "UPDATE" && maybeStatus === "accepted") {
+            void loadUserState(userId, userEmail ?? null);
+          }
         },
       )
       .subscribe();
@@ -375,7 +408,7 @@ export default function Home() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [loadMyJoinRequests, supabase, userId]);
+  }, [loadMyJoinRequests, loadUserState, supabase, userEmail, userId]);
 
   useEffect(() => {
     if (!supabase || !userId || rolLug !== "admin" || !currentLugId) {
@@ -685,46 +718,38 @@ export default function Home() {
     setStatus("LUG asignado al usuario.");
   }
 
-  async function toggleLugJoinRequest(lugId: string, lugName: string) {
+  function openJoinRequestForm(lugId: string, lugName: string) {
+    if (!userId) {
+      return;
+    }
+
+    setJoinRequestTargetLugId(lugId);
+    setJoinRequestTargetLugName(lugName);
+    setJoinRequestMessageInput("");
+    setJoinRequestSocialInput("");
+    setShowJoinRequestFormPanel(true);
+  }
+
+  async function cancelLugJoinRequest(lugId: string, lugName: string) {
     if (!supabase || !userId) {
       return;
     }
 
-    const isPending = requestedLugIds.includes(lugId);
     setRequestActionLoadingLugId(lugId);
 
-    if (isPending) {
-      const { error } = await supabase
-        .from("lug_join_requests")
-        .update({ status: "cancelled" })
-        .eq("requester_id", userId)
-        .eq("lug_id", lugId);
+    const { error } = await supabase
+      .from("lug_join_requests")
+      .update({ status: "cancelled" })
+      .eq("requester_id", userId)
+      .eq("lug_id", lugId);
 
-      if (error) {
-        setStatus(`${t.errorPrefix}: ${error.message}`);
-        setRequestActionLoadingLugId(null);
-        return;
-      }
-
-      setStatus(`Solicitud cancelada para ${lugName}.`);
-    } else {
-      const { error } = await supabase.from("lug_join_requests").upsert(
-        {
-          requester_id: userId,
-          lug_id: lugId,
-          status: "pending",
-        },
-        { onConflict: "requester_id,lug_id" },
-      );
-
-      if (error) {
-        setStatus(`${t.errorPrefix}: ${error.message}`);
-        setRequestActionLoadingLugId(null);
-        return;
-      }
-
-      setStatus(`Solicitud de ingreso enviada para ${lugName}.`);
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setRequestActionLoadingLugId(null);
+      return;
     }
+
+    setStatus(`Solicitud cancelada para ${lugName}.`);
 
     await loadMyJoinRequests(userId);
     if (rolLug === "admin" && currentLugId) {
@@ -734,6 +759,44 @@ export default function Home() {
     setRequestActionLoadingLugId(null);
   }
 
+  async function sendLugJoinRequest() {
+    if (!supabase || !userId || !joinRequestTargetLugId) {
+      return;
+    }
+
+    setJoinRequestSending(true);
+
+    const { error } = await supabase.from("lug_join_requests").upsert(
+      {
+        requester_id: userId,
+        lug_id: joinRequestTargetLugId,
+        status: "pending",
+        request_message: joinRequestMessageInput.trim() || null,
+        contact_social: joinRequestSocialInput.trim() || null,
+      },
+      { onConflict: "requester_id,lug_id" },
+    );
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setJoinRequestSending(false);
+      return;
+    }
+
+    setStatus(`Solicitud de ingreso enviada para ${joinRequestTargetLugName}.`);
+    await loadMyJoinRequests(userId);
+    if (rolLug === "admin" && currentLugId) {
+      await loadAdminPendingRequestsCount(currentLugId);
+    }
+
+    setJoinRequestSending(false);
+    setShowJoinRequestFormPanel(false);
+    setJoinRequestTargetLugId(null);
+    setJoinRequestTargetLugName("");
+    setJoinRequestMessageInput("");
+    setJoinRequestSocialInput("");
+  }
+
   async function openAdminRequestsPanel() {
     if (!currentLugId) {
       return;
@@ -741,6 +804,41 @@ export default function Home() {
 
     setShowAdminRequestsPanel(true);
     await loadAdminPendingRequestsList(currentLugId);
+  }
+
+  function openAdminRequestDetail(request: AdminJoinRequestItem) {
+    setSelectedAdminRequest(request);
+    setShowAdminRequestDetailPanel(true);
+  }
+
+  async function resolveAdminRequest(decision: "accepted" | "rejected") {
+    if (!supabase || !selectedAdminRequest) {
+      return;
+    }
+
+    setAdminDecisionLoading(true);
+
+    const { error } = await supabase.rpc("resolve_lug_join_request", {
+      target_request_id: selectedAdminRequest.request_id,
+      decision_value: decision,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setAdminDecisionLoading(false);
+      return;
+    }
+
+    if (currentLugId) {
+      await loadAdminPendingRequestsCount(currentLugId);
+      await loadAdminPendingRequestsList(currentLugId);
+      await loadMasterLugs();
+    }
+
+    setAdminDecisionLoading(false);
+    setShowAdminRequestDetailPanel(false);
+    setSelectedAdminRequest(null);
+    setStatus(decision === "accepted" ? "Solicitud aceptada." : "Solicitud rechazada.");
   }
 
   async function openLugInfoPanel(lugId: string) {
@@ -1575,21 +1673,27 @@ export default function Home() {
                                 <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
                                 <p className="truncate text-xs text-slate-600">{`${lug.pais ?? "Sin pais"} - ${lug.members_count} miembros`}</p>
                               </div>
-                              <button
-                                type="button"
-                                disabled={requestActionLoadingLugId === lug.lug_id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void toggleLugJoinRequest(lug.lug_id, lug.nombre);
-                                }}
-                                className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
-                              >
-                                {requestActionLoadingLugId === lug.lug_id
-                                  ? "Procesando..."
-                                  : requestedLugIds.includes(lug.lug_id)
-                                    ? "Cancelar solicitud"
-                                    : "Solicitar ingreso"}
-                              </button>
+                              {rolLug !== "admin" ? (
+                                <button
+                                  type="button"
+                                  disabled={requestActionLoadingLugId === lug.lug_id}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (requestedLugIds.includes(lug.lug_id)) {
+                                      void cancelLugJoinRequest(lug.lug_id, lug.nombre);
+                                    } else {
+                                      openJoinRequestForm(lug.lug_id, lug.nombre);
+                                    }
+                                  }}
+                                  className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                                >
+                                  {requestActionLoadingLugId === lug.lug_id
+                                    ? "Procesando..."
+                                    : requestedLugIds.includes(lug.lug_id)
+                                      ? "Cancelar solicitud"
+                                      : "Solicitar ingreso"}
+                                </button>
+                              ) : null}
                             </li>
                           ))}
                         </ul>
@@ -1597,6 +1701,43 @@ export default function Home() {
                     </div>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showJoinRequestFormPanel ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowJoinRequestFormPanel(false)}>
+            <div className="w-full max-w-[320px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <h3 className="text-base font-semibold text-slate-900">Solicitar ingreso</h3>
+              <p className="mt-1 text-xs text-slate-600">{joinRequestTargetLugName}</p>
+
+              <div className="mt-3 space-y-2">
+                <textarea
+                  value={joinRequestMessageInput}
+                  onChange={(event) => setJoinRequestMessageInput(event.target.value)}
+                  rows={3}
+                  placeholder="Escribe un mensaje"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  type="text"
+                  value={joinRequestSocialInput}
+                  onChange={(event) => setJoinRequestSocialInput(event.target.value)}
+                  placeholder="Red social"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void sendLugJoinRequest()}
+                  disabled={joinRequestSending}
+                  className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
+                >
+                  {joinRequestSending ? "Enviando..." : "Enviar"}
+                </button>
               </div>
             </div>
           </div>
@@ -1687,17 +1828,61 @@ export default function Home() {
                 ) : (
                   <ul className="space-y-2">
                     {adminRequests.map((request) => (
-                      <li key={request.request_id} className="rounded-md border border-slate-200 p-3">
+                      <li
+                        key={request.request_id}
+                        onClick={() => openAdminRequestDetail(request)}
+                        className="cursor-pointer rounded-md border border-slate-200 p-3"
+                      >
                         <p className="text-sm font-semibold text-slate-900">{request.full_name}</p>
                         <p className="text-xs text-slate-600">
-                          {request.social_platform && request.social_handle
-                            ? `${request.social_platform}: ${request.social_handle}`
-                            : "Sin red social"}
+                          {request.contact_social
+                            ? request.contact_social
+                            : request.social_platform && request.social_handle
+                              ? `${request.social_platform}: ${request.social_handle}`
+                              : "Sin red social"}
                         </p>
                       </li>
                     ))}
                   </ul>
                 )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showAdminRequestDetailPanel && selectedAdminRequest ? (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4" onClick={() => setShowAdminRequestDetailPanel(false)}>
+            <div className="w-full max-w-[360px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <h3 className="text-base font-semibold text-slate-900">Solicitud de ingreso</h3>
+              <p className="mt-2 text-sm font-semibold text-slate-900">{selectedAdminRequest.full_name}</p>
+              <p className="mt-1 text-xs text-slate-600">
+                {selectedAdminRequest.contact_social
+                  ? selectedAdminRequest.contact_social
+                  : selectedAdminRequest.social_platform && selectedAdminRequest.social_handle
+                    ? `${selectedAdminRequest.social_platform}: ${selectedAdminRequest.social_handle}`
+                    : "Sin red social"}
+              </p>
+              <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                {selectedAdminRequest.request_message || "Sin mensaje"}
+              </p>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => void resolveAdminRequest("rejected")}
+                  disabled={adminDecisionLoading}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  Rechazar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void resolveAdminRequest("accepted")}
+                  disabled={adminDecisionLoading}
+                  className="rounded-md bg-[#006eb2] px-3 py-2 text-sm font-semibold text-white"
+                >
+                  Aceptar
+                </button>
               </div>
             </div>
           </div>
