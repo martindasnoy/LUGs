@@ -57,9 +57,22 @@ type MasterEmptyLugNotificationItem = {
   created_at: string;
 };
 
+type PendingLugAccessAction = {
+  type: "request" | "direct";
+  lug_id: string;
+  lug_name: string;
+};
+
 type RolLug = "admin" | "common" | null;
 
 const FACE_TOTAL = 20;
+const DEFAULT_LOADING_PHRASES = [
+  "Clasificando piezas",
+  "Desarmando sets",
+  "Creando MOCs",
+  "Armando minifiguras",
+  "Pegando stickers en un quesito",
+];
 
 export default function Home() {
   const supabase = getSupabaseClient();
@@ -76,6 +89,36 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [appBootLoading, setAppBootLoading] = useState(true);
+  const [loadingPhrases, setLoadingPhrases] = useState<string[]>(() => {
+    if (typeof window === "undefined") {
+      return DEFAULT_LOADING_PHRASES;
+    }
+
+    try {
+      const raw = window.localStorage.getItem("loading_phrases_v1");
+      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+      if (!Array.isArray(parsed)) {
+        return DEFAULT_LOADING_PHRASES;
+      }
+
+      const normalized = parsed
+        .slice(0, DEFAULT_LOADING_PHRASES.length)
+        .map((item) => String(item ?? "").trim());
+
+      return DEFAULT_LOADING_PHRASES.map((fallback, index) => normalized[index] || fallback);
+    } catch {
+      return DEFAULT_LOADING_PHRASES;
+    }
+  });
+  const [loadingPhrase, setLoadingPhrase] = useState(DEFAULT_LOADING_PHRASES[0]);
+  const [loadingPhrasesDraft, setLoadingPhrasesDraft] = useState<string[]>(DEFAULT_LOADING_PHRASES);
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceMessageLine1, setMaintenanceMessageLine1] = useState("Estamos en mantenimiento");
+  const [maintenanceMessageLine2, setMaintenanceMessageLine2] = useState("Volvé en un rato");
+  const [showMaintenancePanel, setShowMaintenancePanel] = useState(false);
+  const [maintenanceDraftMessageLine1, setMaintenanceDraftMessageLine1] = useState("");
+  const [maintenanceDraftMessageLine2, setMaintenanceDraftMessageLine2] = useState("");
 
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -100,10 +143,13 @@ export default function Home() {
   const [showFacePicker, setShowFacePicker] = useState(false);
   const [previewFace, setPreviewFace] = useState(1);
   const [showMasterPanel, setShowMasterPanel] = useState(false);
+  const [showLoadingPhrasesPanel, setShowLoadingPhrasesPanel] = useState(false);
   const [showLugsPanel, setShowLugsPanel] = useState(false);
   const [showCreateLugPanel, setShowCreateLugPanel] = useState(false);
   const [createLugFromListFlow, setCreateLugFromListFlow] = useState(false);
   const [showCreateLugConfirmPanel, setShowCreateLugConfirmPanel] = useState(false);
+  const [showLugAccessConfirmPanel, setShowLugAccessConfirmPanel] = useState(false);
+  const [pendingLugAccessAction, setPendingLugAccessAction] = useState<PendingLugAccessAction | null>(null);
   const [creatingLug, setCreatingLug] = useState(false);
   const [lugNombre, setLugNombre] = useState("");
   const [lugPais, setLugPais] = useState("");
@@ -112,6 +158,7 @@ export default function Home() {
   const [lugColor2, setLugColor2] = useState("#ffffff");
   const [lugColor3, setLugColor3] = useState("#111111");
   const [lugLogoDataUrl, setLugLogoDataUrl] = useState<string | null>(null);
+  const [lugLogoFile, setLugLogoFile] = useState<File | null>(null);
   const [lugLogoError, setLugLogoError] = useState("");
   const [masterLugs, setMasterLugs] = useState<MasterLugItem[]>([]);
   const [masterLugsLoading, setMasterLugsLoading] = useState(false);
@@ -125,6 +172,7 @@ export default function Home() {
   const [settingsLugColor2Input, setSettingsLugColor2Input] = useState("#ffffff");
   const [settingsLugColor3Input, setSettingsLugColor3Input] = useState("#111111");
   const [settingsLugLogoDataUrl, setSettingsLugLogoDataUrl] = useState<string | null>(null);
+  const [settingsLugLogoFile, setSettingsLugLogoFile] = useState<File | null>(null);
   const [settingsLugLogoError, setSettingsLugLogoError] = useState("");
   const [showLugInfoPanel, setShowLugInfoPanel] = useState(false);
   const [lugInfoLoading, setLugInfoLoading] = useState(false);
@@ -153,6 +201,8 @@ export default function Home() {
   const [currentLugColor1, setCurrentLugColor1] = useState("#006eb2");
   const [currentLugColor2, setCurrentLugColor2] = useState("#ffffff");
   const [currentLugColor3, setCurrentLugColor3] = useState("#111111");
+  const [currentLugLogoDataUrl, setCurrentLugLogoDataUrl] = useState<string | null>(null);
+  const [legacyLogosBackfillRunning, setLegacyLogosBackfillRunning] = useState(false);
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -201,24 +251,219 @@ export default function Home() {
     return luminance > 0.55 ? "#111111" : "#ffffff";
   }
 
+  const pickRandomLoadingPhrase = useCallback(() => {
+    const source = loadingPhrases.map((item) => item.trim()).filter((item) => item.length > 0);
+    if (source.length === 0) {
+      setLoadingPhrase(DEFAULT_LOADING_PHRASES[0]);
+      return;
+    }
+
+    const index = Math.floor(Math.random() * source.length);
+    setLoadingPhrase(source[index]);
+  }, [loadingPhrases]);
+
+  const startBootLoading = useCallback((forcePick = false) => {
+    setAppBootLoading((prev) => {
+      if (forcePick || !prev) {
+        pickRandomLoadingPhrase();
+      }
+      return true;
+    });
+  }, [pickRandomLoadingPhrase]);
+
+  function saveLoadingPhrases(nextDraft: string[]) {
+    const normalized = DEFAULT_LOADING_PHRASES.map((fallback, index) => nextDraft[index]?.trim() || fallback);
+    setLoadingPhrases(normalized);
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("loading_phrases_v1", JSON.stringify(normalized));
+    }
+
+    setStatus("Frases de carga guardadas.");
+    setShowLoadingPhrasesPanel(false);
+  }
+
+  const loadMaintenanceSettings = useCallback(async () => {
+    if (!supabase) {
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("app_maintenance")
+      .select("enabled, message_line1, message_line2")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setMaintenanceEnabled(Boolean(data?.enabled));
+    setMaintenanceMessageLine1(String(data?.message_line1 ?? "Estamos en mantenimiento"));
+    setMaintenanceMessageLine2(String(data?.message_line2 ?? "Volvé en un rato"));
+  }, [supabase, t.errorPrefix]);
+
+  function openMaintenancePanel() {
+    setMaintenanceDraftMessageLine1(maintenanceMessageLine1 || "");
+    setMaintenanceDraftMessageLine2(maintenanceMessageLine2 || "");
+    setShowMaintenancePanel(true);
+  }
+
+  async function activateMaintenanceMode() {
+    if (!supabase) {
+      return;
+    }
+
+    const nextLine1 = maintenanceDraftMessageLine1.trim() || "Estamos en mantenimiento";
+    const nextLine2 = maintenanceDraftMessageLine2.trim() || "Volvé en un rato";
+
+    const { error } = await supabase
+      .from("app_maintenance")
+      .update({
+        enabled: true,
+        message_line1: nextLine1,
+        message_line2: nextLine2,
+      })
+      .eq("id", 1);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setMaintenanceEnabled(true);
+    setMaintenanceMessageLine1(nextLine1);
+    setMaintenanceMessageLine2(nextLine2);
+    setShowMaintenancePanel(false);
+    setStatus("Mantenimiento activado.");
+  }
+
+  async function disableMaintenanceMode() {
+    if (!supabase) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("app_maintenance")
+      .update({
+        enabled: false,
+        message_line1: maintenanceMessageLine1,
+        message_line2: maintenanceMessageLine2,
+      })
+      .eq("id", 1);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setMaintenanceEnabled(false);
+    setStatus("Mantenimiento desactivado.");
+  }
+
   const loadCurrentLugPalette = useCallback(async (lugId: string | null) => {
     if (!supabase || !lugId) {
       setCurrentLugColor1("#006eb2");
       setCurrentLugColor2("#ffffff");
       setCurrentLugColor3("#111111");
+      setCurrentLugLogoDataUrl(null);
       return;
     }
 
     const { data } = await supabase
       .from("lugs")
-      .select("color1, color2, color3")
+      .select("color1, color2, color3, logo_data_url")
       .eq("lug_id", lugId)
       .maybeSingle();
 
     setCurrentLugColor1(String(data?.color1 ?? "#006eb2"));
     setCurrentLugColor2(String(data?.color2 ?? "#ffffff"));
     setCurrentLugColor3(String(data?.color3 ?? "#111111"));
+    setCurrentLugLogoDataUrl(data?.logo_data_url ? String(data.logo_data_url) : null);
   }, [supabase]);
+
+  const backfillLegacyLugLogosToStorage = useCallback(async () => {
+    if (!supabase || !isMaster || legacyLogosBackfillRunning) {
+      return;
+    }
+
+    const storageKey = "lug_logos_backfill_done_v1";
+    if (typeof window !== "undefined" && window.localStorage.getItem(storageKey) === "done") {
+      return;
+    }
+
+    setLegacyLogosBackfillRunning(true);
+
+    const { data, error } = await supabase
+      .from("lugs")
+      .select("lug_id, logo_data_url")
+      .like("logo_data_url", "data:image/%")
+      .limit(25);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setLegacyLogosBackfillRunning(false);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    if (rows.length === 0) {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(storageKey, "done");
+      }
+      setLegacyLogosBackfillRunning(false);
+      return;
+    }
+
+    for (const row of rows) {
+      const lugId = String(row.lug_id ?? "").trim();
+      const rawLogo = String(row.logo_data_url ?? "").trim();
+      if (!lugId || !rawLogo.startsWith("data:image/")) {
+        continue;
+      }
+
+      const mime = rawLogo.includes("image/webp") ? "image/webp" : rawLogo.includes("image/png") ? "image/png" : "image/jpeg";
+      const ext = mime === "image/webp" ? "webp" : mime === "image/png" ? "png" : "jpg";
+
+      try {
+        const blobResponse = await fetch(rawLogo);
+        const blob = await blobResponse.blob();
+        const filePath = `${lugId}/logo.${ext}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("lug-logos")
+          .upload(filePath, blob, { upsert: true, contentType: mime });
+
+        if (uploadError) {
+          continue;
+        }
+
+        const { data: publicData } = supabase.storage.from("lug-logos").getPublicUrl(filePath);
+        const publicUrl = publicData.publicUrl || null;
+        if (!publicUrl) {
+          continue;
+        }
+
+        await supabase
+          .from("lugs")
+          .update({ logo_data_url: publicUrl })
+          .eq("lug_id", lugId);
+
+        if (currentLugId === lugId) {
+          setCurrentLugLogoDataUrl(publicUrl);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(storageKey, "done");
+    }
+
+    setLegacyLogosBackfillRunning(false);
+  }, [currentLugId, isMaster, legacyLogosBackfillRunning, supabase, t.errorPrefix]);
 
   const loadMyJoinRequests = useCallback(async (currentUserId: string) => {
     if (!supabase) {
@@ -364,43 +609,43 @@ export default function Home() {
       return;
     }
 
-    setUserId(currentUserId);
-    setUserEmail(currentEmail);
-
     await ensureProfile(currentUserId, currentEmail);
 
-    const { data: profileData, error } = await supabase
-      .from("profiles")
-      .select("full_name, avatar_key, preferred_language, is_master, current_lug_id, rol_lug")
-      .eq("id", currentUserId)
-      .maybeSingle();
+    const { data, error } = await supabase.rpc("get_dashboard_bootstrap");
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
       return;
     }
 
+    const bootstrapRows = (data ?? []) as Array<Record<string, unknown>>;
+    const profileData = bootstrapRows[0] ?? null;
+
     const fallbackName = String(currentEmail ?? "Usuario").split("@")[0] || "Usuario";
     const fullName = String(profileData?.full_name ?? "").trim();
     const lang = String(profileData?.preferred_language ?? "es");
-    const face = parseAvatarFace(profileData?.avatar_key);
+    const face = parseAvatarFace(profileData?.avatar_key ? String(profileData.avatar_key) : null);
     const nextCurrentLugId = String(profileData?.current_lug_id ?? "").trim() || null;
     const nextRolLug = String(profileData?.rol_lug ?? "").trim();
+    setUserId(currentUserId);
+    setUserEmail(currentEmail);
     setIsMaster(Boolean(profileData?.is_master));
     setCurrentLugId(nextCurrentLugId);
     setRolLug(nextRolLug === "admin" ? "admin" : nextRolLug === "common" ? "common" : null);
-    await loadCurrentLugPalette(nextCurrentLugId);
-    await loadMyJoinRequests(currentUserId);
-    if (Boolean(profileData?.is_master)) {
-      await loadMasterEmptyNotificationsCount();
-    } else {
-      setMasterEmptyNotificationsCount(0);
-    }
-    if (nextRolLug === "admin" && nextCurrentLugId) {
-      await loadAdminPendingRequestsCount(nextCurrentLugId);
-    } else {
-      setAdminPendingRequestsCount(0);
-    }
+    setCurrentLugColor1(String(profileData?.current_lug_color1 ?? "#006eb2"));
+    setCurrentLugColor2(String(profileData?.current_lug_color2 ?? "#ffffff"));
+    setCurrentLugColor3(String(profileData?.current_lug_color3 ?? "#111111"));
+    setCurrentLugLogoDataUrl(profileData?.current_lug_logo_data_url ? String(profileData.current_lug_logo_data_url) : null);
+    const pendingLugIdsRaw = Array.isArray(profileData?.my_pending_lug_ids) ? profileData.my_pending_lug_ids : [];
+    const pendingLugIds = pendingLugIdsRaw
+      .map((value) => String(value ?? "").trim())
+      .filter((value) => value.length > 0);
+    setRequestedLugIds(pendingLugIds);
+    setAdminPendingRequestsCount(Number(profileData?.admin_pending_requests_count ?? 0));
+    setMasterEmptyNotificationsCount(Number(profileData?.master_empty_notifications_count ?? 0));
+    setMaintenanceEnabled(Boolean(profileData?.maintenance_enabled));
+    setMaintenanceMessageLine1(String(profileData?.maintenance_message_line1 ?? "Estamos en mantenimiento"));
+    setMaintenanceMessageLine2(String(profileData?.maintenance_message_line2 ?? "Volvé en un rato"));
 
     setDisplayName(fullName || fallbackName);
     setSelectedFace(face);
@@ -412,15 +657,7 @@ export default function Home() {
         window.localStorage.setItem("ui_language", lang);
       }
     }
-  }, [
-    ensureProfile,
-    loadAdminPendingRequestsCount,
-    loadCurrentLugPalette,
-    loadMasterEmptyNotificationsCount,
-    loadMyJoinRequests,
-    supabase,
-    t.errorPrefix,
-  ]);
+  }, [ensureProfile, supabase, t.errorPrefix]);
 
   useEffect(() => {
     if (!supabase) {
@@ -428,12 +665,14 @@ export default function Home() {
     }
 
     const init = async () => {
+      startBootLoading(true);
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (user?.id) {
         await loadUserState(user.id, user.email ?? null);
+        await loadMaintenanceSettings();
       } else {
         setUserId(null);
         setUserEmail(null);
@@ -454,10 +693,18 @@ export default function Home() {
         setCurrentLugColor1("#006eb2");
         setCurrentLugColor2("#ffffff");
         setCurrentLugColor3("#111111");
+        setCurrentLugLogoDataUrl(null);
         setMasterEmptyNotificationsCount(0);
         setShowMasterEmptyLugsPanel(false);
         setMasterEmptyLugs([]);
+        setShowLugAccessConfirmPanel(false);
+        setPendingLugAccessAction(null);
+        setMaintenanceEnabled(false);
+        setMaintenanceMessageLine1("Estamos en mantenimiento");
+        setMaintenanceMessageLine2("Volvé en un rato");
       }
+
+      setAppBootLoading(false);
     };
 
     void init();
@@ -465,37 +712,60 @@ export default function Home() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user?.id) {
-        void loadUserState(session.user.id, session.user.email ?? null);
-      } else {
-        setUserId(null);
-        setUserEmail(null);
-        setDisplayName("Usuario");
-        setIsMaster(false);
-        setCurrentLugId(null);
-        setRolLug(null);
-        setRequestedLugIds([]);
-        setAdminPendingRequestsCount(0);
-        setShowAdminRequestsPanel(false);
-        setAdminRequests([]);
-        setShowJoinRequestFormPanel(false);
-        setJoinRequestTargetLugId(null);
-        setJoinRequestTargetLugName("");
-        setJoinRequestMessageInput("");
-        setJoinRequestSocialInput("");
-        setShowAdminRequestDetailPanel(false);
-        setSelectedAdminRequest(null);
-        setCurrentLugColor1("#006eb2");
-        setCurrentLugColor2("#ffffff");
-        setCurrentLugColor3("#111111");
-        setMasterEmptyNotificationsCount(0);
-        setShowMasterEmptyLugsPanel(false);
-        setMasterEmptyLugs([]);
-      }
+      void (async () => {
+        startBootLoading();
+        if (session?.user?.id) {
+          await loadUserState(session.user.id, session.user.email ?? null);
+          await loadMaintenanceSettings();
+        } else {
+          setUserId(null);
+          setUserEmail(null);
+          setDisplayName("Usuario");
+          setIsMaster(false);
+          setCurrentLugId(null);
+          setRolLug(null);
+          setRequestedLugIds([]);
+          setAdminPendingRequestsCount(0);
+          setShowAdminRequestsPanel(false);
+          setAdminRequests([]);
+          setShowJoinRequestFormPanel(false);
+          setJoinRequestTargetLugId(null);
+          setJoinRequestTargetLugName("");
+          setJoinRequestMessageInput("");
+          setJoinRequestSocialInput("");
+          setShowAdminRequestDetailPanel(false);
+          setSelectedAdminRequest(null);
+          setCurrentLugColor1("#006eb2");
+          setCurrentLugColor2("#ffffff");
+          setCurrentLugColor3("#111111");
+          setCurrentLugLogoDataUrl(null);
+          setMasterEmptyNotificationsCount(0);
+          setShowMasterEmptyLugsPanel(false);
+          setMasterEmptyLugs([]);
+          setShowLugAccessConfirmPanel(false);
+          setPendingLugAccessAction(null);
+          setMaintenanceEnabled(false);
+          setMaintenanceMessageLine1("Estamos en mantenimiento");
+          setMaintenanceMessageLine2("Volvé en un rato");
+        }
+        setAppBootLoading(false);
+      })();
     });
 
     return () => subscription.unsubscribe();
-  }, [loadUserState, supabase]);
+  }, [loadMaintenanceSettings, loadUserState, startBootLoading, supabase]);
+
+  useEffect(() => {
+    if (!userId || !isMaster) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void backfillLegacyLugLogosToStorage();
+    }, 800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [backfillLegacyLugLogosToStorage, isMaster, userId]);
 
   useEffect(() => {
     if (!supabase || !userId) {
@@ -600,6 +870,18 @@ export default function Home() {
 
     return () => window.clearInterval(intervalId);
   }, [loadMasterEmptyNotificationsList, showMasterEmptyLugsPanel]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadMaintenanceSettings();
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadMaintenanceSettings, userId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -765,6 +1047,7 @@ export default function Home() {
 
     if (!file) {
       setLugLogoDataUrl(null);
+      setLugLogoFile(null);
       return;
     }
 
@@ -781,18 +1064,44 @@ export default function Home() {
         if (img.width > 500 || img.height > 500) {
           setLugLogoError("La imagen debe ser maximo 500x500 px.");
           setLugLogoDataUrl(null);
+          setLugLogoFile(null);
         } else {
           setLugLogoDataUrl(dataUrl);
+          setLugLogoFile(file);
         }
         resolve();
       };
       img.onerror = () => {
         setLugLogoError("No pudimos leer la imagen.");
         setLugLogoDataUrl(null);
+        setLugLogoFile(null);
         resolve();
       };
       img.src = dataUrl;
     });
+  }
+
+  async function uploadLugLogoFile(targetLugId: string, file: File) {
+    if (!supabase) {
+      return null;
+    }
+
+    const normalizedName = file.name.toLowerCase();
+    const ext = normalizedName.endsWith(".png") ? "png" : normalizedName.endsWith(".webp") ? "webp" : "jpg";
+    const contentType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const filePath = `${targetLugId}/logo.${ext}`;
+
+    const { error } = await supabase.storage
+      .from("lug-logos")
+      .upload(filePath, file, { upsert: true, contentType });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return null;
+    }
+
+    const { data } = supabase.storage.from("lug-logos").getPublicUrl(filePath);
+    return data.publicUrl || null;
   }
 
   async function createLugFromMaster(assignCreatorToNewLug: boolean) {
@@ -816,7 +1125,7 @@ export default function Home() {
         color1: lugColor1.trim() || null,
         color2: lugColor2.trim() || null,
         color3: lugColor3.trim() || null,
-        logo_data_url: lugLogoDataUrl,
+        logo_data_url: null,
       })
       .select("lug_id, nombre")
       .single();
@@ -827,6 +1136,20 @@ export default function Home() {
       return;
     }
 
+    if (createdLug?.lug_id && lugLogoFile) {
+      const uploadedLogoUrl = await uploadLugLogoFile(String(createdLug.lug_id), lugLogoFile);
+      if (uploadedLogoUrl) {
+        const { error: logoUpdateError } = await supabase
+          .from("lugs")
+          .update({ logo_data_url: uploadedLogoUrl })
+          .eq("lug_id", createdLug.lug_id);
+
+        if (logoUpdateError) {
+          setStatus(`${t.errorPrefix}: ${logoUpdateError.message}`);
+        }
+      }
+    }
+
     setLugNombre("");
     setLugPais("");
     setLugDescripcion("");
@@ -834,6 +1157,7 @@ export default function Home() {
     setLugColor2("#ffffff");
     setLugColor3("#111111");
     setLugLogoDataUrl(null);
+    setLugLogoFile(null);
     setLugLogoError("");
 
     if (assignCreatorToNewLug && userId && createdLug?.lug_id) {
@@ -1046,6 +1370,78 @@ export default function Home() {
     setStatus(`Ingresaste directo a ${lugName}.`);
   }
 
+  async function deleteOpenLugFromMaster(lugId: string, lugName: string) {
+    if (!supabase) {
+      return;
+    }
+
+    setMasterLugActionLoadingId(lugId);
+
+    const { error } = await supabase
+      .from("lugs")
+      .delete()
+      .eq("lug_id", lugId)
+      .eq("open_access", true);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMasterLugActionLoadingId(null);
+      return;
+    }
+
+    await loadMasterLugs();
+    if (isMaster) {
+      await loadMasterEmptyNotificationsCount();
+      if (showMasterEmptyLugsPanel) {
+        await loadMasterEmptyNotificationsList();
+      }
+    }
+    if (currentLugId === lugId) {
+      setCurrentLugId(null);
+      setSettingsLugId(null);
+      setRolLug(null);
+    }
+
+    setMasterLugActionLoadingId(null);
+    setStatus(`LUG abierto eliminado: ${lugName}.`);
+  }
+
+  function startLugAccessAction(lug: MasterLugItem) {
+    const nextType: PendingLugAccessAction["type"] = lug.open_access ? "direct" : "request";
+
+    if (currentLugId && currentLugId !== lug.lug_id) {
+      setPendingLugAccessAction({
+        type: nextType,
+        lug_id: lug.lug_id,
+        lug_name: lug.nombre,
+      });
+      setShowLugAccessConfirmPanel(true);
+      return;
+    }
+
+    if (nextType === "direct") {
+      void joinOpenLugDirectly(lug.lug_id, lug.nombre);
+      return;
+    }
+
+    openJoinRequestForm(lug.lug_id, lug.nombre);
+  }
+
+  function confirmLugAccessAction() {
+    if (!pendingLugAccessAction) {
+      return;
+    }
+
+    if (pendingLugAccessAction.type === "direct") {
+      void joinOpenLugDirectly(pendingLugAccessAction.lug_id, pendingLugAccessAction.lug_name);
+    } else {
+      openJoinRequestForm(pendingLugAccessAction.lug_id, pendingLugAccessAction.lug_name);
+    }
+
+    setShowLugAccessConfirmPanel(false);
+    setPendingLugAccessAction(null);
+  }
+
   function openAdminRequestDetail(request: AdminJoinRequestItem) {
     setSelectedAdminRequest(request);
     setShowAdminRequestDetailPanel(true);
@@ -1160,6 +1556,7 @@ export default function Home() {
 
     if (!file) {
       setSettingsLugLogoDataUrl(null);
+      setSettingsLugLogoFile(null);
       return;
     }
 
@@ -1176,14 +1573,17 @@ export default function Home() {
         if (img.width > 500 || img.height > 500) {
           setSettingsLugLogoError("La imagen debe ser maximo 500x500 px.");
           setSettingsLugLogoDataUrl(null);
+          setSettingsLugLogoFile(null);
         } else {
           setSettingsLugLogoDataUrl(dataUrl);
+          setSettingsLugLogoFile(file);
         }
         resolve();
       };
       img.onerror = () => {
         setSettingsLugLogoError("No pudimos leer la imagen.");
         setSettingsLugLogoDataUrl(null);
+        setSettingsLugLogoFile(null);
         resolve();
       };
       img.src = dataUrl;
@@ -1219,6 +1619,7 @@ export default function Home() {
     setSettingsLugColor2Input(String(data?.color2 ?? "#ffffff"));
     setSettingsLugColor3Input(String(data?.color3 ?? "#111111"));
     setSettingsLugLogoDataUrl(data?.logo_data_url ? String(data.logo_data_url) : null);
+    setSettingsLugLogoFile(null);
 
     setSettingsLugPanelLoading(false);
   }
@@ -1235,6 +1636,14 @@ export default function Home() {
 
     setSettingsLugSaving(true);
 
+    let nextSettingsLogoUrl = settingsLugLogoDataUrl;
+    if (settingsLugLogoFile) {
+      const uploadedLogoUrl = await uploadLugLogoFile(settingsLugId, settingsLugLogoFile);
+      if (uploadedLogoUrl) {
+        nextSettingsLogoUrl = uploadedLogoUrl;
+      }
+    }
+
     const { error } = await supabase
       .from("lugs")
       .update({
@@ -1244,7 +1653,7 @@ export default function Home() {
         color1: settingsLugColor1Input.trim() || null,
         color2: settingsLugColor2Input.trim() || null,
         color3: settingsLugColor3Input.trim() || null,
-        logo_data_url: settingsLugLogoDataUrl,
+        logo_data_url: nextSettingsLogoUrl,
       })
       .eq("lug_id", settingsLugId);
 
@@ -1256,6 +1665,9 @@ export default function Home() {
 
     setSettingsLugName(settingsLugNombreInput.trim() || settingsLugName);
     await loadMasterLugs();
+    if (currentLugId === settingsLugId) {
+      await loadCurrentLugPalette(settingsLugId);
+    }
     setSettingsLugSaving(false);
     setShowSettingsLugPanel(false);
     setStatus("Informacion del LUG actualizada.");
@@ -1329,6 +1741,39 @@ export default function Home() {
     setMasterLugsLoading(false);
   }, [supabase, t.errorPrefix]);
 
+  if (maintenanceEnabled && !isMaster) {
+    return (
+      <main className="bg-lego-tile min-h-screen">
+        <div className="flex min-h-screen items-center justify-center px-4">
+          <div className="flex flex-col items-center gap-4">
+            <Image
+              src="/api/avatar/Constructor.png"
+              alt="Constructor"
+              width={220}
+              height={220}
+              unoptimized
+              className="h-[220px] w-[220px] object-contain"
+            />
+            <div className="space-y-2 text-center">
+              <p className="font-cubano-title text-3xl font-semibold text-white">{maintenanceMessageLine1}</p>
+              <p className="font-cubano-title text-2xl font-semibold text-white">{maintenanceMessageLine2}</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (appBootLoading && supabase) {
+    return (
+      <main className="bg-lego-tile min-h-screen">
+        <div className="flex min-h-screen items-center justify-center">
+          <p className="font-cubano-title text-3xl font-semibold text-white">{loadingPhrase}</p>
+        </div>
+      </main>
+    );
+  }
+
   if (userEmail) {
     return (
       <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
@@ -1346,7 +1791,7 @@ export default function Home() {
             </button>
           ) : null}
 
-          <div className="rounded-2xl border-[10px] p-[5px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
           <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
           <header className="border-b border-slate-200 pb-5">
             <div className="flex items-start justify-between gap-3">
@@ -1391,10 +1836,10 @@ export default function Home() {
                   ) : null}
                 </div>
               </div>
-              {currentUserLug?.logo_data_url ? (
+              {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
                 <Image
-                  src={currentUserLug.logo_data_url}
-                  alt={currentUserLug.nombre || "Logo LUG"}
+                  src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
+                  alt={currentUserLug?.nombre || "Logo LUG"}
                   width={126}
                   height={126}
                   unoptimized
@@ -1427,7 +1872,31 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 grid w-full grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => setStatus("Listas en preparación.")}
+                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                style={{ borderColor: currentLugColor2 || "#ffffff" }}
+              >
+                Listas
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatus("Minifiguras en preparación.")}
+                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                style={{ borderColor: currentLugColor2 || "#ffffff" }}
+              >
+                Minifiguras
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatus("Módulo X en preparación.")}
+                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                style={{ borderColor: currentLugColor2 || "#ffffff" }}
+              >
+                X
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1437,16 +1906,17 @@ export default function Home() {
                     void loadMyJoinRequests(userId);
                   }
                 }}
-                className="rounded-lg border border-slate-300 bg-white p-2"
+                className="flex aspect-[5/3] w-full flex-col items-center justify-center rounded-lg border-2 bg-white"
+                style={{ borderColor: currentLugColor2 || "#ffffff" }}
                 title="Ver LUGs"
               >
                 <Image
                   src="/api/avatar/Mundo.png"
                   alt="Ver LUGs"
-                  width={84}
-                  height={84}
+                  width={200}
+                  height={200}
                   unoptimized
-                  className="h-[84px] w-[84px] object-contain"
+                  className="h-[88%] w-[88%] object-contain"
                 />
               </button>
             </div>
@@ -1856,6 +2326,9 @@ export default function Home() {
                     onClick={() => {
                       setCreateLugFromListFlow(false);
                       setShowCreateLugConfirmPanel(false);
+                      setLugLogoFile(null);
+                      setLugLogoDataUrl(null);
+                      setLugLogoError("");
                       setShowCreateLugPanel(true);
                     }}
                     className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
@@ -1897,10 +2370,158 @@ export default function Home() {
                             <p className="truncate text-xs text-slate-600">{lug.pais ?? "Sin pais"}</p>
                           </div>
                           <p className="text-xs text-slate-700">{lug.members_count} miembros</p>
+                          {lug.open_access ? (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void deleteOpenLugFromMaster(lug.lug_id, lug.nombre);
+                              }}
+                              disabled={masterLugActionLoadingId === lug.lug_id}
+                              className="ml-2 rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
+                            >
+                              {masterLugActionLoadingId === lug.lug_id ? "Borrando..." : "Borrar"}
+                            </button>
+                          ) : null}
                         </li>
                       ))}
                     </ul>
                   )}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-slate-200 p-4">
+                <h4 className="text-sm font-semibold text-slate-900">Mantenimiento</h4>
+                <div className="mt-3 flex flex-wrap items-center justify-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoadingPhrasesDraft([...loadingPhrases]);
+                      setShowLoadingPhrasesPanel(true);
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    Frases de carga
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (maintenanceEnabled) {
+                        void disableMaintenanceMode();
+                      } else {
+                        openMaintenancePanel();
+                      }
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    {maintenanceEnabled ? "Sacar de mantenimiento" : "Bloqueo de mantenimiento"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showLoadingPhrasesPanel ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowLoadingPhrasesPanel(false)}>
+            <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <h3 className="text-xl text-slate-900">Frases de carga</h3>
+              <p className="mt-1 text-sm text-slate-600">Edita y guarda las frases. Se aplica en próximas cargas.</p>
+
+              <div className="mt-4 space-y-2">
+                {DEFAULT_LOADING_PHRASES.map((_phrase, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <span className="text-slate-500">•</span>
+                    <input
+                      type="text"
+                      value={loadingPhrasesDraft[index] ?? ""}
+                      onChange={(event) => {
+                        const next = [...loadingPhrasesDraft];
+                        next[index] = event.target.value;
+                        setLoadingPhrasesDraft(next);
+                      }}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLoadingPhrasesPanel(false)}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveLoadingPhrases(loadingPhrasesDraft)}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+                >
+                  Guardar
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showMaintenancePanel ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowMaintenancePanel(false)}>
+            <div className="w-full max-w-[620px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-xl text-slate-900">Bloqueo de mantenimiento</h3>
+                <button
+                  type="button"
+                  onClick={() => void activateMaintenanceMode()}
+                  className="rounded-md border px-4 py-2 text-sm font-semibold"
+                  style={{
+                    backgroundColor: uiColor1,
+                    color: uiColor1Text,
+                    borderColor: uiColor3,
+                  }}
+                >
+                  Poner en mantenimiento
+                </button>
+              </div>
+
+              <label className="block text-sm text-slate-700">Frase linea 1</label>
+              <input
+                type="text"
+                value={maintenanceDraftMessageLine1}
+                onChange={(event) => setMaintenanceDraftMessageLine1(event.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Escribí la primera línea"
+              />
+
+              <label className="mt-3 block text-sm text-slate-700">Frase linea 2</label>
+              <input
+                type="text"
+                value={maintenanceDraftMessageLine2}
+                onChange={(event) => setMaintenanceDraftMessageLine2(event.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Escribí la segunda línea"
+              />
+
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Vista previa</p>
+              <div className="bg-lego-tile mt-2 min-h-[280px] rounded-lg p-4">
+                <div className="flex min-h-[248px] flex-col items-center justify-center gap-3">
+                  <Image
+                    src="/api/avatar/Constructor.png"
+                    alt="Constructor"
+                    width={140}
+                    height={140}
+                    unoptimized
+                    className="h-[140px] w-[140px] object-contain"
+                  />
+                  <div className="space-y-2 text-center">
+                    <p className="font-cubano-title text-2xl font-semibold text-white">
+                      {maintenanceDraftMessageLine1.trim() || "Estamos en mantenimiento"}
+                    </p>
+                    <p className="font-cubano-title text-xl font-semibold text-white">
+                      {maintenanceDraftMessageLine2.trim() || "Volvé en un rato"}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1983,16 +2604,16 @@ export default function Home() {
                               <button
                                 type="button"
                                 disabled={requestActionLoadingLugId === lug.lug_id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  if (lug.open_access) {
-                                    void joinOpenLugDirectly(lug.lug_id, lug.nombre);
-                                  } else if (requestedLugIds.includes(lug.lug_id)) {
-                                    void cancelLugJoinRequest(lug.lug_id, lug.nombre);
-                                  } else {
-                                    openJoinRequestForm(lug.lug_id, lug.nombre);
-                                  }
-                                }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (lug.open_access) {
+                                      startLugAccessAction(lug);
+                                    } else if (requestedLugIds.includes(lug.lug_id)) {
+                                      void cancelLugJoinRequest(lug.lug_id, lug.nombre);
+                                    } else {
+                                      startLugAccessAction(lug);
+                                    }
+                                  }}
                                 className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
                               >
                                 {requestActionLoadingLugId === lug.lug_id
@@ -2020,6 +2641,7 @@ export default function Home() {
                           setLugColor2("#ffffff");
                           setLugColor3("#111111");
                           setLugLogoDataUrl(null);
+                          setLugLogoFile(null);
                           setLugLogoError("");
                           setCreateLugFromListFlow(true);
                           setShowCreateLugConfirmPanel(false);
@@ -2453,6 +3075,54 @@ export default function Home() {
                   type="button"
                   onClick={() => void createLugFromMaster(true)}
                   disabled={creatingLug}
+                  className="rounded-md border px-3 py-2 text-sm font-semibold"
+                  style={{
+                    backgroundColor: uiColor1,
+                    color: uiColor1Text,
+                    borderColor: uiColor3,
+                  }}
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showLugAccessConfirmPanel ? (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4"
+            onClick={() => {
+              setShowLugAccessConfirmPanel(false);
+              setPendingLugAccessAction(null);
+            }}
+          >
+            <div className="w-full max-w-[360px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex justify-center">
+                <Image
+                  src="/api/avatar/LEGO-ICON_A.svg"
+                  alt="LEGO icon"
+                  width={192}
+                  height={192}
+                  unoptimized
+                  className="h-48 w-48 object-contain"
+                />
+              </div>
+              <p className="text-sm text-slate-900">Si seguís adelante vas a salir de tu LUG actual.</p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLugAccessConfirmPanel(false);
+                    setPendingLugAccessAction(null);
+                  }}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmLugAccessAction()}
                   className="rounded-md border px-3 py-2 text-sm font-semibold"
                   style={{
                     backgroundColor: uiColor1,

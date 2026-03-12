@@ -40,6 +40,14 @@
   - Adds empty LUG notifications for master and open-access resolution flow.
 - `supabase/migrations/0019_add_admin_handover_on_leave.sql`
   - Transfers admin role to the next member when an admin leaves a LUG.
+- `supabase/migrations/0020_add_dashboard_bootstrap_rpc.sql`
+  - Adds a single RPC to bootstrap dashboard state in one request.
+- `supabase/migrations/0021_add_lug_logos_storage_bucket.sql`
+  - Creates public storage bucket for LUG logos to avoid base64-heavy DB payloads.
+- `supabase/migrations/0022_add_global_maintenance_and_bootstrap_fields.sql`
+  - Adds global maintenance settings and extends dashboard bootstrap RPC.
+- `supabase/migrations/0023_fix_app_maintenance_rls_insert.sql`
+  - Fixes RLS insert policy for app maintenance setup.
 
 ## How to run in Supabase dashboard
 
@@ -63,6 +71,10 @@
 18. Run `0017_add_promote_member_admin_rpc.sql`.
 19. Run `0018_empty_lug_notifications_and_open_access.sql`.
 20. Run `0019_add_admin_handover_on_leave.sql`.
+21. Run `0020_add_dashboard_bootstrap_rpc.sql`.
+22. Run `0021_add_lug_logos_storage_bucket.sql`.
+23. Run `0022_add_global_maintenance_and_bootstrap_fields.sql`.
+24. Run `0023_fix_app_maintenance_rls_insert.sql`.
 
 ## Notes
 
