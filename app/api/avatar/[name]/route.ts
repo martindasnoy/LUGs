@@ -10,7 +10,7 @@ export async function GET(
   const safeName = path.basename(name);
   const normalized = safeName.toLowerCase();
 
-  if (!normalized.endsWith(".png") && !normalized.endsWith(".jpg") && !normalized.endsWith(".jpeg")) {
+  if (!normalized.endsWith(".png") && !normalized.endsWith(".jpg") && !normalized.endsWith(".jpeg") && !normalized.endsWith(".svg")) {
     return NextResponse.json({ error: "Invalid file" }, { status: 400 });
   }
 
@@ -18,9 +18,15 @@ export async function GET(
 
   try {
     const buffer = await readFile(filePath);
+    const contentType = normalized.endsWith(".png")
+      ? "image/png"
+      : normalized.endsWith(".svg")
+        ? "image/svg+xml"
+        : "image/jpeg";
+
     return new NextResponse(buffer, {
       headers: {
-        "Content-Type": normalized.endsWith(".png") ? "image/png" : "image/jpeg",
+        "Content-Type": contentType,
         "Cache-Control": "public, max-age=86400",
       },
     });

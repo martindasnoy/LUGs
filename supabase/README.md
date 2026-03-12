@@ -32,6 +32,14 @@
   - Adds request message/social and status values `accepted`/`rejected`.
 - `supabase/migrations/0015_add_join_request_resolution_rpc.sql`
   - Adds RPC for admin request detail and accept/reject actions.
+- `supabase/migrations/0016_update_lug_members_rpc_with_role.sql`
+  - Updates LUG members RPC to include `rol_lug` for admin badge in member list.
+- `supabase/migrations/0017_add_promote_member_admin_rpc.sql`
+  - Adds RPC to let LUG admins promote a member to admin.
+- `supabase/migrations/0018_empty_lug_notifications_and_open_access.sql`
+  - Adds empty LUG notifications for master and open-access resolution flow.
+- `supabase/migrations/0019_add_admin_handover_on_leave.sql`
+  - Transfers admin role to the next member when an admin leaves a LUG.
 
 ## How to run in Supabase dashboard
 
@@ -51,6 +59,10 @@
 14. Run `0013_add_admin_pending_requests_rpc.sql`.
 15. Run `0014_extend_lug_join_requests.sql`.
 16. Run `0015_add_join_request_resolution_rpc.sql`.
+17. Run `0016_update_lug_members_rpc_with_role.sql`.
+18. Run `0017_add_promote_member_admin_rpc.sql`.
+19. Run `0018_empty_lug_notifications_and_open_access.sql`.
+20. Run `0019_add_admin_handover_on_leave.sql`.
 
 ## Notes
 

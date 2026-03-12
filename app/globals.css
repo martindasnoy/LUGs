@@ -12,6 +12,19 @@
   --font-mono: var(--font-geist-mono);
 }
 
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-cubano), var(--font-geist-sans), sans-serif;
+}
+
+.font-cubano-title {
+  font-family: var(--font-cubano), var(--font-geist-sans), sans-serif;
+}
+
 body {
   background: var(--background);
   color: #000;

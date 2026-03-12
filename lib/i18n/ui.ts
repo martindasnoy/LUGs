@@ -40,7 +40,7 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     errorPrefix: "Error",
     settingsAria: "Configuracion de usuario",
     settingsTitle: "Configuracion de usuario",
-    logout: "Salir",
+    logout: "Cerrar sesión",
     language: "Idioma",
   },
   en: {

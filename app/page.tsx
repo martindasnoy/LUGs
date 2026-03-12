@@ -14,6 +14,7 @@ type MasterLugItem = {
   pais: string | null;
   logo_data_url: string | null;
   color1: string | null;
+  open_access: boolean;
   members_count: number;
 };
 
@@ -22,6 +23,7 @@ type LugMemberItem = {
   full_name: string;
   social_platform: string | null;
   social_handle: string | null;
+  rol_lug: string | null;
 };
 
 type LugInfoItem = {
@@ -43,6 +45,15 @@ type AdminJoinRequestItem = {
   social_handle: string | null;
   request_message: string | null;
   contact_social: string | null;
+  created_at: string;
+};
+
+type MasterEmptyLugNotificationItem = {
+  notification_id: string;
+  lug_id: string;
+  nombre: string;
+  pais: string | null;
+  descripcion: string | null;
   created_at: string;
 };
 
@@ -91,6 +102,8 @@ export default function Home() {
   const [showMasterPanel, setShowMasterPanel] = useState(false);
   const [showLugsPanel, setShowLugsPanel] = useState(false);
   const [showCreateLugPanel, setShowCreateLugPanel] = useState(false);
+  const [createLugFromListFlow, setCreateLugFromListFlow] = useState(false);
+  const [showCreateLugConfirmPanel, setShowCreateLugConfirmPanel] = useState(false);
   const [creatingLug, setCreatingLug] = useState(false);
   const [lugNombre, setLugNombre] = useState("");
   const [lugPais, setLugPais] = useState("");
@@ -131,6 +144,15 @@ export default function Home() {
   const [showAdminRequestDetailPanel, setShowAdminRequestDetailPanel] = useState(false);
   const [selectedAdminRequest, setSelectedAdminRequest] = useState<AdminJoinRequestItem | null>(null);
   const [adminDecisionLoading, setAdminDecisionLoading] = useState(false);
+  const [promoteMemberLoadingId, setPromoteMemberLoadingId] = useState<string | null>(null);
+  const [masterEmptyNotificationsCount, setMasterEmptyNotificationsCount] = useState(0);
+  const [showMasterEmptyLugsPanel, setShowMasterEmptyLugsPanel] = useState(false);
+  const [masterEmptyLugsLoading, setMasterEmptyLugsLoading] = useState(false);
+  const [masterEmptyLugs, setMasterEmptyLugs] = useState<MasterEmptyLugNotificationItem[]>([]);
+  const [masterLugActionLoadingId, setMasterLugActionLoadingId] = useState<string | null>(null);
+  const [currentLugColor1, setCurrentLugColor1] = useState("#006eb2");
+  const [currentLugColor2, setCurrentLugColor2] = useState("#ffffff");
+  const [currentLugColor3, setCurrentLugColor3] = useState("#111111");
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -142,6 +164,9 @@ export default function Home() {
     () => masterLugs.filter((lug) => lug.lug_id !== currentLugId),
     [masterLugs, currentLugId],
   );
+  const uiColor1 = currentLugColor1 || "#006eb2";
+  const uiColor3 = currentLugColor3 || "#111111";
+  const uiColor1Text = getContrastTextColor(uiColor1);
 
   function getFaceImagePath(faceNum: number) {
     return `/api/avatar/Cabeza_${String(faceNum).padStart(2, "0")}.png`;
@@ -175,6 +200,25 @@ export default function Home() {
     const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     return luminance > 0.55 ? "#111111" : "#ffffff";
   }
+
+  const loadCurrentLugPalette = useCallback(async (lugId: string | null) => {
+    if (!supabase || !lugId) {
+      setCurrentLugColor1("#006eb2");
+      setCurrentLugColor2("#ffffff");
+      setCurrentLugColor3("#111111");
+      return;
+    }
+
+    const { data } = await supabase
+      .from("lugs")
+      .select("color1, color2, color3")
+      .eq("lug_id", lugId)
+      .maybeSingle();
+
+    setCurrentLugColor1(String(data?.color1 ?? "#006eb2"));
+    setCurrentLugColor2(String(data?.color2 ?? "#ffffff"));
+    setCurrentLugColor3(String(data?.color3 ?? "#111111"));
+  }, [supabase]);
 
   const loadMyJoinRequests = useCallback(async (currentUserId: string) => {
     if (!supabase) {
@@ -253,6 +297,53 @@ export default function Home() {
     setAdminRequestsLoading(false);
   }, [supabase, t.errorPrefix]);
 
+  const loadMasterEmptyNotificationsCount = useCallback(async () => {
+    if (!supabase) {
+      return;
+    }
+
+    const { count, error } = await supabase
+      .from("lug_empty_notifications")
+      .select("notification_id", { count: "exact", head: true })
+      .eq("status", "pending");
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setMasterEmptyNotificationsCount(Number(count ?? 0));
+  }, [supabase, t.errorPrefix]);
+
+  const loadMasterEmptyNotificationsList = useCallback(async () => {
+    if (!supabase) {
+      return;
+    }
+
+    setMasterEmptyLugsLoading(true);
+
+    const { data, error } = await supabase.rpc("get_master_empty_lug_notifications");
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMasterEmptyLugs([]);
+      setMasterEmptyLugsLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const parsed = rows.map((row) => ({
+      notification_id: String(row.notification_id ?? ""),
+      lug_id: String(row.lug_id ?? ""),
+      nombre: String(row.nombre ?? ""),
+      pais: row.pais ? String(row.pais) : null,
+      descripcion: row.descripcion ? String(row.descripcion) : null,
+      created_at: String(row.created_at ?? ""),
+    }));
+
+    setMasterEmptyLugs(parsed);
+    setMasterEmptyLugsLoading(false);
+  }, [supabase, t.errorPrefix]);
+
   const ensureProfile = useCallback(async (currentUserId: string, currentEmail: string | null) => {
     if (!supabase) {
       return;
@@ -298,7 +389,13 @@ export default function Home() {
     setIsMaster(Boolean(profileData?.is_master));
     setCurrentLugId(nextCurrentLugId);
     setRolLug(nextRolLug === "admin" ? "admin" : nextRolLug === "common" ? "common" : null);
+    await loadCurrentLugPalette(nextCurrentLugId);
     await loadMyJoinRequests(currentUserId);
+    if (Boolean(profileData?.is_master)) {
+      await loadMasterEmptyNotificationsCount();
+    } else {
+      setMasterEmptyNotificationsCount(0);
+    }
     if (nextRolLug === "admin" && nextCurrentLugId) {
       await loadAdminPendingRequestsCount(nextCurrentLugId);
     } else {
@@ -315,7 +412,15 @@ export default function Home() {
         window.localStorage.setItem("ui_language", lang);
       }
     }
-  }, [ensureProfile, loadAdminPendingRequestsCount, loadMyJoinRequests, supabase, t.errorPrefix]);
+  }, [
+    ensureProfile,
+    loadAdminPendingRequestsCount,
+    loadCurrentLugPalette,
+    loadMasterEmptyNotificationsCount,
+    loadMyJoinRequests,
+    supabase,
+    t.errorPrefix,
+  ]);
 
   useEffect(() => {
     if (!supabase) {
@@ -346,6 +451,12 @@ export default function Home() {
         setJoinRequestSocialInput("");
         setShowAdminRequestDetailPanel(false);
         setSelectedAdminRequest(null);
+        setCurrentLugColor1("#006eb2");
+        setCurrentLugColor2("#ffffff");
+        setCurrentLugColor3("#111111");
+        setMasterEmptyNotificationsCount(0);
+        setShowMasterEmptyLugsPanel(false);
+        setMasterEmptyLugs([]);
       }
     };
 
@@ -374,6 +485,12 @@ export default function Home() {
         setJoinRequestSocialInput("");
         setShowAdminRequestDetailPanel(false);
         setSelectedAdminRequest(null);
+        setCurrentLugColor1("#006eb2");
+        setCurrentLugColor2("#ffffff");
+        setCurrentLugColor3("#111111");
+        setMasterEmptyNotificationsCount(0);
+        setShowMasterEmptyLugsPanel(false);
+        setMasterEmptyLugs([]);
       }
     });
 
@@ -459,6 +576,30 @@ export default function Home() {
 
     return () => window.clearInterval(intervalId);
   }, [currentLugId, loadAdminPendingRequestsList, showAdminRequestsPanel]);
+
+  useEffect(() => {
+    if (!userId || !isMaster) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadMasterEmptyNotificationsCount();
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isMaster, loadMasterEmptyNotificationsCount, userId]);
+
+  useEffect(() => {
+    if (!showMasterEmptyLugsPanel) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadMasterEmptyNotificationsList();
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadMasterEmptyNotificationsList, showMasterEmptyLugsPanel]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -654,7 +795,7 @@ export default function Home() {
     });
   }
 
-  async function createLugFromMaster() {
+  async function createLugFromMaster(assignCreatorToNewLug: boolean) {
     if (!supabase) {
       return;
     }
@@ -666,15 +807,19 @@ export default function Home() {
 
     setCreatingLug(true);
 
-    const { error } = await supabase.from("lugs").insert({
-      nombre: lugNombre.trim(),
-      pais: lugPais.trim() || null,
-      descripcion: lugDescripcion.trim() || null,
-      color1: lugColor1.trim() || null,
-      color2: lugColor2.trim() || null,
-      color3: lugColor3.trim() || null,
-      logo_data_url: lugLogoDataUrl,
-    });
+    const { data: createdLug, error } = await supabase
+      .from("lugs")
+      .insert({
+        nombre: lugNombre.trim(),
+        pais: lugPais.trim() || null,
+        descripcion: lugDescripcion.trim() || null,
+        color1: lugColor1.trim() || null,
+        color2: lugColor2.trim() || null,
+        color3: lugColor3.trim() || null,
+        logo_data_url: lugLogoDataUrl,
+      })
+      .select("lug_id, nombre")
+      .single();
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -690,10 +835,36 @@ export default function Home() {
     setLugColor3("#111111");
     setLugLogoDataUrl(null);
     setLugLogoError("");
+
+    if (assignCreatorToNewLug && userId && createdLug?.lug_id) {
+      const { error: assignError } = await supabase
+        .from("profiles")
+        .update({
+          current_lug_id: createdLug.lug_id,
+          rol_lug: "admin",
+        })
+        .eq("id", userId);
+
+      if (assignError) {
+        setStatus(`${t.errorPrefix}: ${assignError.message}`);
+        setCreatingLug(false);
+        return;
+      }
+
+      setCurrentLugId(String(createdLug.lug_id));
+      setSettingsLugId(String(createdLug.lug_id));
+      setSettingsLugName(String(createdLug.nombre ?? ""));
+      setRolLug("admin");
+      await loadCurrentLugPalette(String(createdLug.lug_id));
+      await loadMyJoinRequests(userId);
+    }
+
     setShowCreateLugPanel(false);
+    setCreateLugFromListFlow(false);
+    setShowCreateLugConfirmPanel(false);
     await loadMasterLugs();
     setCreatingLug(false);
-    setStatus("LUG creado correctamente.");
+    setStatus(assignCreatorToNewLug ? "LUG creado y asignado al usuario." : "LUG creado correctamente.");
   }
 
   async function assignCurrentLug(lugId: string) {
@@ -715,6 +886,7 @@ export default function Home() {
 
     setCurrentLugId(lugId);
     setSettingsLugId(lugId);
+    await loadCurrentLugPalette(lugId);
     setStatus("LUG asignado al usuario.");
   }
 
@@ -806,6 +978,74 @@ export default function Home() {
     await loadAdminPendingRequestsList(currentLugId);
   }
 
+  async function openMasterEmptyLugsPanel() {
+    setShowMasterEmptyLugsPanel(true);
+    await loadMasterEmptyNotificationsList();
+  }
+
+  async function resolveMasterEmptyLug(notificationId: string, actionValue: "delete" | "open") {
+    if (!supabase) {
+      return;
+    }
+
+    setMasterLugActionLoadingId(notificationId);
+
+    const { error } = await supabase.rpc("resolve_empty_lug_notification", {
+      target_notification_id: notificationId,
+      action_value: actionValue,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMasterLugActionLoadingId(null);
+      return;
+    }
+
+    await loadMasterEmptyNotificationsCount();
+    await loadMasterEmptyNotificationsList();
+    await loadMasterLugs();
+
+    setMasterLugActionLoadingId(null);
+    setStatus(actionValue === "delete" ? "LUG eliminado." : "LUG abierto para ingreso directo.");
+  }
+
+  async function joinOpenLugDirectly(lugId: string, lugName: string) {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setRequestActionLoadingLugId(lugId);
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        current_lug_id: lugId,
+        rol_lug: "common",
+      })
+      .eq("id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setRequestActionLoadingLugId(null);
+      return;
+    }
+
+    await supabase
+      .from("lug_join_requests")
+      .update({ status: "cancelled" })
+      .eq("requester_id", userId)
+      .eq("status", "pending");
+
+    setCurrentLugId(lugId);
+    setSettingsLugId(lugId);
+    setRolLug("common");
+    await loadCurrentLugPalette(lugId);
+    await loadMyJoinRequests(userId);
+    await loadMasterLugs();
+    setRequestActionLoadingLugId(null);
+    setStatus(`Ingresaste directo a ${lugName}.`);
+  }
+
   function openAdminRequestDetail(request: AdminJoinRequestItem) {
     setSelectedAdminRequest(request);
     setShowAdminRequestDetailPanel(true);
@@ -839,6 +1079,29 @@ export default function Home() {
     setShowAdminRequestDetailPanel(false);
     setSelectedAdminRequest(null);
     setStatus(decision === "accepted" ? "Solicitud aceptada." : "Solicitud rechazada.");
+  }
+
+  async function promoteMemberToAdmin(memberId: string, memberName: string) {
+    if (!supabase || !lugInfoData) {
+      return;
+    }
+
+    setPromoteMemberLoadingId(memberId);
+
+    const { error } = await supabase.rpc("promote_lug_member_to_admin", {
+      target_lug_id: lugInfoData.lug_id,
+      target_member_id: memberId,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setPromoteMemberLoadingId(null);
+      return;
+    }
+
+    setStatus(`${memberName} ahora es admin del LUG.`);
+    await openLugInfoPanel(lugInfoData.lug_id);
+    setPromoteMemberLoadingId(null);
   }
 
   async function openLugInfoPanel(lugId: string) {
@@ -876,6 +1139,7 @@ export default function Home() {
       full_name: String(member.full_name ?? "Usuario"),
       social_platform: member.social_platform ? String(member.social_platform) : null,
       social_handle: member.social_handle ? String(member.social_handle) : null,
+      rol_lug: member.rol_lug ? String(member.rol_lug) : null,
     }));
 
     setLugInfoData({
@@ -1006,7 +1270,7 @@ export default function Home() {
 
     const lugsResult = await supabase
       .from("lugs")
-      .select("lug_id, nombre, pais, color1, logo_data_url")
+      .select("lug_id, nombre, pais, color1, open_access, logo_data_url")
       .order("created_at", { ascending: false });
 
     let lugsData = lugsResult.data;
@@ -1015,7 +1279,7 @@ export default function Home() {
     if (lugsError) {
       const fallbackLugs = await supabase
         .from("lugs")
-        .select("lug_id, nombre, pais, color1")
+        .select("lug_id, nombre, pais, color1, open_access")
         .order("created_at", { ascending: false });
 
       if (!fallbackLugs.error) {
@@ -1056,6 +1320,7 @@ export default function Home() {
       nombre: String(lug.nombre ?? ""),
       pais: lug.pais ? String(lug.pais) : null,
       color1: lug.color1 ? String(lug.color1) : null,
+      open_access: Boolean(lug.open_access),
       logo_data_url: lug.logo_data_url ? String(lug.logo_data_url) : null,
       members_count: counts[String(lug.lug_id)] ?? 0,
     }));
@@ -1081,7 +1346,8 @@ export default function Home() {
             </button>
           ) : null}
 
-          <div className="rounded-2xl border-[10px] border-[#006eb2] bg-white p-4 shadow-xl sm:p-8">
+          <div className="rounded-2xl border-[10px] p-[5px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
           <header className="border-b border-slate-200 pb-5">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -1094,7 +1360,21 @@ export default function Home() {
                   className="h-20 w-20 object-contain"
                 />
                 <div className="flex items-center gap-2">
-                  <h1 className="break-all text-3xl font-semibold text-slate-900 sm:text-5xl">{displayName}</h1>
+                  <h1 className="font-cubano-title break-all text-3xl font-semibold text-slate-900 sm:text-5xl">{displayName}</h1>
+                  {isMaster && masterEmptyNotificationsCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void openMasterEmptyLugsPanel()}
+                      className="relative rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700"
+                      title="LUGs vacíos"
+                      aria-label="LUGs vacíos"
+                    >
+                      <span className="text-base">✉</span>
+                      <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
+                        {masterEmptyNotificationsCount}
+                      </span>
+                    </button>
+                  ) : null}
                   {rolLug === "admin" && adminPendingRequestsCount > 0 ? (
                     <button
                       type="button"
@@ -1111,28 +1391,16 @@ export default function Home() {
                   ) : null}
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLugsPanel(true);
-                  void loadMasterLugs();
-                  if (userId) {
-                    void loadMyJoinRequests(userId);
-                  }
-                }}
-                className="rounded-lg border border-slate-300 bg-white p-2"
-                title="Ver LUGs"
-              >
+              {currentUserLug?.logo_data_url ? (
                 <Image
-                  src="/api/avatar/Mundo.png"
-                  alt="Ver LUGs"
-                  width={56}
-                  height={56}
+                  src={currentUserLug.logo_data_url}
+                  alt={currentUserLug.nombre || "Logo LUG"}
+                  width={126}
+                  height={126}
                   unoptimized
-                  className="h-14 w-14 object-contain"
+                  className="h-[126px] w-[126px] object-contain"
                 />
-              </button>
+              ) : null}
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3 text-black">
@@ -1158,7 +1426,32 @@ export default function Home() {
                 {t.logout}
               </button>
             </div>
+
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLugsPanel(true);
+                  void loadMasterLugs();
+                  if (userId) {
+                    void loadMyJoinRequests(userId);
+                  }
+                }}
+                className="rounded-lg border border-slate-300 bg-white p-2"
+                title="Ver LUGs"
+              >
+                <Image
+                  src="/api/avatar/Mundo.png"
+                  alt="Ver LUGs"
+                  width={84}
+                  height={84}
+                  unoptimized
+                  className="h-[84px] w-[84px] object-contain"
+                />
+              </button>
+            </div>
           </header>
+          </div>
           </div>
 
         {showUserSettings ? (
@@ -1331,7 +1624,12 @@ export default function Home() {
                   type="button"
                   onClick={() => void saveUserSettings()}
                   disabled={settingsSaving}
-                  className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
+                  className="rounded-md border px-4 py-2 text-sm font-semibold"
+                  style={{
+                    backgroundColor: uiColor1,
+                    color: uiColor1Text,
+                    borderColor: uiColor3,
+                  }}
                 >
                   {settingsSaving ? "Guardando..." : "Guardar"}
                 </button>
@@ -1519,7 +1817,12 @@ export default function Home() {
                         type="button"
                         onClick={() => void saveSettingsLugPanel()}
                         disabled={settingsLugSaving}
-                        className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
+                        className="rounded-md border px-4 py-2 text-sm font-semibold"
+                        style={{
+                          backgroundColor: uiColor1,
+                          color: uiColor1Text,
+                          borderColor: uiColor3,
+                        }}
                       >
                         {settingsLugSaving ? "Guardando..." : "Guardar"}
                       </button>
@@ -1550,7 +1853,11 @@ export default function Home() {
                   <h4 className="text-sm font-semibold text-slate-900">LUGs</h4>
                   <button
                     type="button"
-                    onClick={() => setShowCreateLugPanel(true)}
+                    onClick={() => {
+                      setCreateLugFromListFlow(false);
+                      setShowCreateLugConfirmPanel(false);
+                      setShowCreateLugPanel(true);
+                    }}
                     className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
                   >
                     Crear LUG
@@ -1673,31 +1980,60 @@ export default function Home() {
                                 <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
                                 <p className="truncate text-xs text-slate-600">{`${lug.pais ?? "Sin pais"} - ${lug.members_count} miembros`}</p>
                               </div>
-                              {rolLug !== "admin" ? (
-                                <button
-                                  type="button"
-                                  disabled={requestActionLoadingLugId === lug.lug_id}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (requestedLugIds.includes(lug.lug_id)) {
-                                      void cancelLugJoinRequest(lug.lug_id, lug.nombre);
-                                    } else {
-                                      openJoinRequestForm(lug.lug_id, lug.nombre);
-                                    }
-                                  }}
-                                  className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
-                                >
-                                  {requestActionLoadingLugId === lug.lug_id
-                                    ? "Procesando..."
+                              <button
+                                type="button"
+                                disabled={requestActionLoadingLugId === lug.lug_id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (lug.open_access) {
+                                    void joinOpenLugDirectly(lug.lug_id, lug.nombre);
+                                  } else if (requestedLugIds.includes(lug.lug_id)) {
+                                    void cancelLugJoinRequest(lug.lug_id, lug.nombre);
+                                  } else {
+                                    openJoinRequestForm(lug.lug_id, lug.nombre);
+                                  }
+                                }}
+                                className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                              >
+                                {requestActionLoadingLugId === lug.lug_id
+                                  ? "Procesando..."
+                                  : lug.open_access
+                                    ? "Entrar directo"
                                     : requestedLugIds.includes(lug.lug_id)
-                                      ? "Cancelar solicitud"
-                                      : "Solicitar ingreso"}
-                                </button>
-                              ) : null}
+                                    ? "Cancelar solicitud"
+                                    : "Solicitar ingreso"}
+                              </button>
                             </li>
                           ))}
                         </ul>
                       )}
+                    </div>
+
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLugNombre("");
+                          setLugPais("");
+                          setLugDescripcion("");
+                          setLugColor1("#006eb2");
+                          setLugColor2("#ffffff");
+                          setLugColor3("#111111");
+                          setLugLogoDataUrl(null);
+                          setLugLogoError("");
+                          setCreateLugFromListFlow(true);
+                          setShowCreateLugConfirmPanel(false);
+                          setShowCreateLugPanel(true);
+                        }}
+                        className="rounded-md border px-4 py-2 text-sm font-semibold"
+                        style={{
+                          backgroundColor: uiColor1,
+                          color: uiColor1Text,
+                          borderColor: uiColor3,
+                        }}
+                      >
+                        Crear nuevo LUG
+                      </button>
                     </div>
                   </>
                 )}
@@ -1754,7 +2090,10 @@ export default function Home() {
                 <p className="mt-4 text-sm text-slate-600">Cargando informacion...</p>
               ) : lugInfoData ? (
                 <>
-                  <div className="mt-4 rounded-lg border border-slate-300 bg-slate-50 p-4">
+                  <div
+                    className="mt-4 rounded-lg border border-slate-300 p-4"
+                    style={{ backgroundColor: lugInfoData.color1 || "#eaf6ff" }}
+                  >
                     <div className="rounded-lg border border-slate-200 bg-white p-5">
                       <div className="mx-auto h-40 w-40 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
                         {lugInfoData.logo_data_url ? (
@@ -1786,7 +2125,26 @@ export default function Home() {
                         <ul className="space-y-2">
                           {lugInfoData.members.map((member) => (
                             <li key={member.id} className="rounded-md border border-slate-200 px-3 py-2">
-                              <p className="text-sm font-semibold text-slate-900">{member.full_name}</p>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-semibold text-slate-900">{member.full_name}</p>
+                                  {member.rol_lug === "admin" ? (
+                                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                                      Admin
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {rolLug === "admin" && currentLugId === lugInfoData.lug_id && member.rol_lug !== "admin" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void promoteMemberToAdmin(member.id, member.full_name)}
+                                    disabled={promoteMemberLoadingId === member.id}
+                                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                  >
+                                    {promoteMemberLoadingId === member.id ? "Procesando..." : "Hacer Admin"}
+                                  </button>
+                                ) : null}
+                              </div>
                               <p className="text-xs text-slate-600">
                                 {member.social_platform && member.social_handle
                                   ? `${member.social_platform}: ${member.social_handle}`
@@ -1850,6 +2208,60 @@ export default function Home() {
           </div>
         ) : null}
 
+        {showMasterEmptyLugsPanel ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowMasterEmptyLugsPanel(false)}>
+            <div className="w-full max-w-[460px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-xl text-slate-900">LUGs vacíos</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowMasterEmptyLugsPanel(false)}
+                  className="rounded-md border border-slate-300 px-3 py-1 text-sm"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="mt-3 max-h-[360px] overflow-auto rounded-md border border-slate-200 p-2">
+                {masterEmptyLugsLoading ? (
+                  <p className="text-sm text-slate-600">Cargando LUGs vacíos...</p>
+                ) : masterEmptyLugs.length === 0 ? (
+                  <p className="text-sm text-slate-500">No hay LUGs vacíos pendientes.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {masterEmptyLugs.map((emptyLug) => (
+                      <li key={emptyLug.notification_id} className="rounded-md border border-slate-200 p-3">
+                        <p className="text-sm font-semibold text-slate-900">{emptyLug.nombre || "Sin nombre"}</p>
+                        <p className="text-xs text-slate-600">{emptyLug.pais || "Sin pais"}</p>
+                        <p className="mt-1 text-xs text-slate-600">{emptyLug.descripcion || "Sin descripcion"}</p>
+
+                        <div className="mt-3 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void resolveMasterEmptyLug(emptyLug.notification_id, "delete")}
+                            disabled={masterLugActionLoadingId === emptyLug.notification_id}
+                            className="rounded-md border border-red-300 px-3 py-1 text-xs font-semibold text-red-700"
+                          >
+                            Borrar LUG
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void resolveMasterEmptyLug(emptyLug.notification_id, "open")}
+                            disabled={masterLugActionLoadingId === emptyLug.notification_id}
+                            className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                          >
+                            Dejar abierto
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {showAdminRequestDetailPanel && selectedAdminRequest ? (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4" onClick={() => setShowAdminRequestDetailPanel(false)}>
             <div className="w-full max-w-[360px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
@@ -1889,7 +2301,14 @@ export default function Home() {
         ) : null}
 
         {showCreateLugPanel ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowCreateLugPanel(false)}>
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
+            onClick={() => {
+              setShowCreateLugPanel(false);
+              setShowCreateLugConfirmPanel(false);
+              setCreateLugFromListFlow(false);
+            }}
+          >
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <h3 className="text-xl text-slate-900">Crear LUG</h3>
 
@@ -1975,18 +2394,73 @@ export default function Home() {
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowCreateLugPanel(false)}
+                  onClick={() => {
+                    setShowCreateLugPanel(false);
+                    setShowCreateLugConfirmPanel(false);
+                    setCreateLugFromListFlow(false);
+                  }}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
-                  onClick={() => void createLugFromMaster()}
+                  onClick={() => {
+                    if (createLugFromListFlow) {
+                      setShowCreateLugConfirmPanel(true);
+                    } else {
+                      void createLugFromMaster(false);
+                    }
+                  }}
                   disabled={creatingLug}
-                  className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
+                  className="rounded-md border px-4 py-2 text-sm font-semibold"
+                  style={{
+                    backgroundColor: uiColor1,
+                    color: uiColor1Text,
+                    borderColor: uiColor3,
+                  }}
                 >
-                  {creatingLug ? "Creando..." : "Crear LUG"}
+                  {creatingLug ? "Creando..." : createLugFromListFlow ? "Crear nuevo LUG" : "Crear LUG"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showCreateLugConfirmPanel ? (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4" onClick={() => setShowCreateLugConfirmPanel(false)}>
+            <div className="w-full max-w-[360px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex justify-center">
+                <Image
+                  src="/api/avatar/LEGO-ICON_A.svg"
+                  alt="LEGO icon"
+                  width={192}
+                  height={192}
+                  unoptimized
+                  className="h-48 w-48 object-contain"
+                />
+              </div>
+              <p className="text-sm text-slate-900">Si seguís adelante vas a abandonar tu LUG actual.</p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateLugConfirmPanel(false)}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void createLugFromMaster(true)}
+                  disabled={creatingLug}
+                  className="rounded-md border px-3 py-2 text-sm font-semibold"
+                  style={{
+                    backgroundColor: uiColor1,
+                    color: uiColor1Text,
+                    borderColor: uiColor3,
+                  }}
+                >
+                  OK
                 </button>
               </div>
             </div>
