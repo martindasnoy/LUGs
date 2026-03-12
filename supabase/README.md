@@ -1,56 +1,52 @@
-# Supabase setup
+# Supabase setup (users only)
 
 ## Folder structure
 
-- `supabase/migrations/0001_init_schema.sql`
-  - Creates tables, indexes, trigger and RLS policies.
-- `supabase/migrations/0002_set_master_user.sql`
-  - Marks one user as `is_master = true`.
-- `supabase/migrations/0003_lug_owner_membership.sql`
-  - Auto-creates owner membership when a LUG is created.
-- `supabase/migrations/0004_lug_join_requests.sql`
-  - Adds join-request flow and approval policies.
-- `supabase/migrations/0005_profile_onboarding_fields.sql`
-  - Adds profile onboarding fields (country, social links).
-- `supabase/migrations/0006_fix_profiles_rls_recursion.sql`
-  - Fixes recursive RLS error on `profiles`.
-- `supabase/migrations/0007_profile_avatar_social_fields.sql`
-  - Adds social + avatar fields for profile panel.
-- `supabase/migrations/0008_profile_language.sql`
-  - Adds preferred language field in profiles.
-- `supabase/migrations/0009_lug_setup_fields_and_admin_membership.sql`
-  - Adds LUG setup fields and sets creator membership as admin.
-- `supabase/migrations/0010_lug_ui_colors_and_panel_access.sql`
-  - Adds 4 UI colors per LUG and read policies for LUG panel/member list.
-- `supabase/migrations/0011_profile_current_lug_and_membership_status.sql`
-  - Adds `profiles.current_lug_id` and `lug_memberships.membership_status`.
-- `supabase/migrations/0012_get_lugs_panel_data_rpc.sql`
-  - Adds RPC `get_lugs_panel_data` for reliable LUG panel loading.
-- `supabase/migrations/0013_get_lugs_panel_data_noargs.sql`
-  - Adds no-args RPC variant for schema cache compatibility.
-- `supabase/migrations/0014_profiles_insert_policy.sql`
-  - Allows users to insert their own missing profile row.
+- `supabase/migrations/0001_users_only_schema.sql`
+  - Creates only `profiles` + trigger + RLS for authenticated users.
+- `supabase/migrations/0002_drop_lugs_tables.sql`
+  - Drops all LUG-related tables and functions.
+- `supabase/migrations/0003_add_is_master_to_profiles.sql`
+  - Adds `profiles.is_master` for master panel visibility.
+- `supabase/migrations/0004_create_lugs_and_profile_role.sql`
+  - Creates `lugs` table and adds `profiles.rol_lug`.
+- `supabase/migrations/0005_add_lugs_profile_constraints.sql`
+  - Adds color hex checks and allowed values for `profiles.rol_lug`.
+- `supabase/migrations/0006_add_logo_to_lugs.sql`
+  - Adds logo field to `lugs` table.
+- `supabase/migrations/0007_add_profile_lug_id.sql`
+  - Adds `profiles.lug_id` to link users with LUGs.
+- `supabase/migrations/0008_add_current_lug_id_to_profiles.sql`
+  - Adds `profiles.current_lug_id` and backfills from `lug_id`.
+- `supabase/migrations/0009_update_rol_lug_allowed_values.sql`
+  - Restricts `profiles.rol_lug` to `admin` or `common`.
+- `supabase/migrations/0010_add_lug_member_rpc.sql`
+  - Adds RPCs to read LUG members and counts by `profiles.current_lug_id`.
+- `supabase/migrations/0011_drop_profiles_lug_id.sql`
+  - Backfills `current_lug_id` and removes legacy `profiles.lug_id`.
+- `supabase/migrations/0012_add_lug_join_requests.sql`
+  - Adds join request notifications for LUG admins.
+- `supabase/migrations/0013_add_admin_pending_requests_rpc.sql`
+  - Adds RPC for admins to read pending requests list.
 
 ## How to run in Supabase dashboard
 
 1. Open `SQL Editor` in your Supabase project.
-2. Run `0001_init_schema.sql` first.
-3. Edit `0002_set_master_user.sql` and replace `TU_EMAIL_MASTER@MAIL.COM`.
-4. Run `0002_set_master_user.sql`.
-5. Run `0003_lug_owner_membership.sql`.
-6. Run `0004_lug_join_requests.sql`.
-7. Run `0005_profile_onboarding_fields.sql`.
-8. Run `0006_fix_profiles_rls_recursion.sql`.
-9. Run `0007_profile_avatar_social_fields.sql`.
-10. Run `0008_profile_language.sql`.
-11. Run `0009_lug_setup_fields_and_admin_membership.sql`.
-12. Run `0010_lug_ui_colors_and_panel_access.sql`.
-13. Run `0011_profile_current_lug_and_membership_status.sql`.
-14. Run `0012_get_lugs_panel_data_rpc.sql`.
-15. Run `0013_get_lugs_panel_data_noargs.sql`.
-16. Run `0014_profiles_insert_policy.sql`.
+2. Run `0002_drop_lugs_tables.sql` first (clean LUG data/model).
+3. Run `0001_users_only_schema.sql`.
+4. Run `0003_add_is_master_to_profiles.sql`.
+5. Run `0004_create_lugs_and_profile_role.sql`.
+6. Run `0005_add_lugs_profile_constraints.sql`.
+7. Run `0006_add_logo_to_lugs.sql`.
+8. Run `0007_add_profile_lug_id.sql`.
+9. Run `0008_add_current_lug_id_to_profiles.sql`.
+10. Run `0009_update_rol_lug_allowed_values.sql`.
+11. Run `0010_add_lug_member_rpc.sql`.
+12. Run `0011_drop_profiles_lug_id.sql`.
+13. Run `0012_add_lug_join_requests.sql`.
+14. Run `0013_add_admin_pending_requests_rpc.sql`.
 
 ## Notes
 
-- Run file 2 only after at least one user has registered.
+- This reset leaves only user/auth related data (`auth.users` + `public.profiles`).
 - Do not expose secret keys in frontend code.
