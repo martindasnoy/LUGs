@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Lottie from "lottie-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
@@ -92,11 +92,52 @@ type PartCatalogItem = {
   is_printed?: boolean;
 };
 
+type GoBrickColorItem = {
+  id: number;
+  lego: string | null;
+  bricklink: string | null;
+  lego_available: boolean;
+  hex: string | null;
+};
+
+const NO_COLOR_LABEL = "Sin color";
+
+function normalizeColorLabel(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function colorMatchesAvailable(optionLabel: string, availableLabels: string[]) {
+  const target = normalizeColorLabel(optionLabel);
+  return availableLabels.some((name) => {
+    const current = normalizeColorLabel(name);
+    return current === target || current.includes(target) || target.includes(current);
+  });
+}
+
+function parseStoredColorLabel(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const clean = String(value).trim();
+  if (!clean) {
+    return null;
+  }
+
+  return clean.replace(/^lego:\s*/i, "").replace(/^bricklink:\s*/i, "").trim() || null;
+}
+
 type ListPartItem = {
   item_id: string;
   part_num: string | null;
   part_name: string | null;
   color_name: string | null;
+  imgmatchcolor: boolean;
+  display_color_label: string | null;
+  part_img_url: string | null;
   quantity: number;
 };
 
@@ -266,10 +307,9 @@ export default function Home() {
   const [listItemsLoading, setListItemsLoading] = useState(false);
   const [listItemsRows, setListItemsRows] = useState<ListPartItem[]>([]);
   const [partsCategories, setPartsCategories] = useState<PartCategoryItem[]>([]);
-  const [partsSearchLoading, setPartsSearchLoading] = useState(false);
   const [partsSearchQuery, setPartsSearchQuery] = useState("");
-  const [partsSearchCategoryId, setPartsSearchCategoryId] = useState<number | null>(null);
   const [partsSearchResults, setPartsSearchResults] = useState<PartCatalogItem[]>([]);
+  const [goBrickColors, setGoBrickColors] = useState<GoBrickColorItem[]>([]);
   const [showCategoriesPanel, setShowCategoriesPanel] = useState(false);
   const [categoriesPanelMode, setCategoriesPanelMode] = useState<CategoriesPanelMode>("categories");
   const [categoryQuickFilter, setCategoryQuickFilter] = useState<CategoryQuickFilter>("popular");
@@ -286,10 +326,16 @@ export default function Home() {
   const [listaToRename, setListaToRename] = useState<ListaItem | null>(null);
   const [renameListaInput, setRenameListaInput] = useState("");
   const [addItemColorMode, setAddItemColorMode] = useState<"bricklink" | "lego">("bricklink");
-  const [addItemColorNameInput, setAddItemColorNameInput] = useState("");
+  const [addItemColorNameInput, setAddItemColorNameInput] = useState(NO_COLOR_LABEL);
+  const [showColorDropdown, setShowColorDropdown] = useState(false);
+  const [addItemColorExists, setAddItemColorExists] = useState(true);
+  const [partAvailableColorNames, setPartAvailableColorNames] = useState<string[]>([]);
   const [addItemQuantity, setAddItemQuantity] = useState(1);
   const [selectedSearchPartNum, setSelectedSearchPartNum] = useState<string | null>(null);
+  const [selectedPartColorImageUrl, setSelectedPartColorImageUrl] = useState<string | null>(null);
+  const [selectedPartColorImageMissing, setSelectedPartColorImageMissing] = useState(false);
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({});
+  const colorDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -368,6 +414,58 @@ export default function Home() {
     () => partsSearchResults.find((part) => part.part_num === selectedSearchPartNum) ?? null,
     [partsSearchResults, selectedSearchPartNum],
   );
+  const colorOptions = useMemo(() => {
+    return goBrickColors
+      .map((color) => {
+        const label = addItemColorMode === "lego" ? color.lego : color.bricklink;
+        return {
+          id: color.id,
+          label,
+          hex: color.hex,
+          lego_available: color.lego_available,
+        };
+      })
+      .filter(
+        (value): value is { id: number; label: string; hex: string | null; lego_available: boolean } => Boolean(value.label),
+      );
+  }, [goBrickColors, addItemColorMode]);
+  const visibleColorOptions = useMemo(() => {
+    if (!addItemColorExists) {
+      return colorOptions;
+    }
+
+    if (partAvailableColorNames.length === 0) {
+      return colorOptions;
+    }
+
+    return colorOptions.filter((option) => colorMatchesAvailable(option.label, partAvailableColorNames));
+  }, [addItemColorExists, colorOptions, partAvailableColorNames]);
+  const selectedColorHex = useMemo(
+    () => visibleColorOptions.find((option) => option.label === addItemColorNameInput)?.hex ?? null,
+    [visibleColorOptions, addItemColorNameInput],
+  );
+  const colorHexByLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    goBrickColors.forEach((color) => {
+      if (!color.hex) {
+        return;
+      }
+      if (color.lego) {
+        map.set(normalizeColorLabel(color.lego), color.hex);
+      }
+      if (color.bricklink) {
+        map.set(normalizeColorLabel(color.bricklink), color.hex);
+      }
+    });
+    return map;
+  }, [goBrickColors]);
+  const useColoredPreview = Boolean(
+    selectedSearchPart?.part_num && addItemColorNameInput.trim() && addItemColorNameInput !== NO_COLOR_LABEL,
+  );
+  const selectedPartPreviewImage = useColoredPreview
+    ? selectedPartColorImageUrl || selectedSearchPart?.part_img_url || null
+    : selectedSearchPart?.part_img_url || null;
+  const showGenericColorImageWarning = useColoredPreview && selectedPartColorImageMissing;
   const showLoaderPopup =
     loading ||
     settingsSaving ||
@@ -387,7 +485,114 @@ export default function Home() {
     listasLoading ||
     listasSaving ||
     listItemsLoading ||
-    partsSearchLoading;
+    panelPartsLoading;
+
+  useEffect(() => {
+    if (!showColorDropdown) {
+      return;
+    }
+
+    function handleOutsideClick(event: MouseEvent) {
+      if (colorDropdownRef.current && !colorDropdownRef.current.contains(event.target as Node)) {
+        setShowColorDropdown(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [showColorDropdown]);
+
+  useEffect(() => {
+    if (!addItemColorExists) {
+      return;
+    }
+
+    const partNum = selectedSearchPart?.part_num;
+    if (!partNum) {
+      return;
+    }
+    const safePartNum = partNum;
+
+    let cancelled = false;
+
+    async function loadAvailableColors() {
+      try {
+        const params = new URLSearchParams({ part_num: safePartNum, mode: addItemColorMode });
+        const response = await fetch(`/api/rebrickable/part-colors?${params.toString()}`);
+        const json = (await response.json()) as { colors?: string[] };
+
+        if (cancelled) {
+          return;
+        }
+
+        const names = Array.isArray(json.colors) ? json.colors.map((name) => String(name)) : [];
+        setPartAvailableColorNames(names);
+
+        if (addItemColorNameInput !== NO_COLOR_LABEL && !colorMatchesAvailable(addItemColorNameInput, names)) {
+          setAddItemColorNameInput(NO_COLOR_LABEL);
+        }
+      } catch {
+        if (!cancelled) {
+          setPartAvailableColorNames([]);
+        }
+      }
+    }
+
+    void loadAvailableColors();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [addItemColorExists, selectedSearchPart?.part_num, addItemColorMode, addItemColorNameInput]);
+
+  useEffect(() => {
+    const partNum = selectedSearchPart?.part_num;
+    const colorLabel = addItemColorNameInput.trim();
+
+    if (!partNum || !colorLabel || colorLabel === NO_COLOR_LABEL) {
+      return;
+    }
+
+    const safePartNum = partNum;
+
+    let cancelled = false;
+
+    async function loadColoredImage() {
+      try {
+        const params = new URLSearchParams({
+          part_num: safePartNum,
+          color_name: colorLabel,
+          mode: addItemColorMode,
+        });
+
+        const response = await fetch(`/api/rebrickable/part-color-image?${params.toString()}`);
+        const json = (await response.json()) as { image_url?: string | null };
+
+        if (cancelled) {
+          return;
+        }
+
+        if (json.image_url) {
+          setSelectedPartColorImageUrl(String(json.image_url));
+          setSelectedPartColorImageMissing(false);
+        } else {
+          setSelectedPartColorImageUrl(null);
+          setSelectedPartColorImageMissing(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedPartColorImageUrl(null);
+          setSelectedPartColorImageMissing(true);
+        }
+      }
+    }
+
+    void loadColoredImage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSearchPart?.part_num, addItemColorNameInput, addItemColorMode]);
 
   function getFaceImagePath(faceNum: number) {
     return `/api/avatar/Cabeza_${String(faceNum).padStart(2, "0")}.png`;
@@ -756,7 +961,7 @@ export default function Home() {
 
       const { data, error } = await supabase
         .from("list_items")
-        .select("item_id, part_num, part_name, color_name, quantity")
+        .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity")
         .eq("list_id", listId)
         .order("created_at", { ascending: false });
 
@@ -772,10 +977,77 @@ export default function Home() {
         part_num: row.part_num ? String(row.part_num) : null,
         part_name: row.part_name ? String(row.part_name) : null,
         color_name: row.color_name ? String(row.color_name) : null,
+        imgmatchcolor: Boolean(row.imgmatchcolor),
+        display_color_label: parseStoredColorLabel(row.color_name ? String(row.color_name) : null),
+        part_img_url: null,
         quantity: Number(row.quantity ?? 1),
       }));
 
-      setListItemsRows(parsedRows);
+      const partNums = Array.from(new Set(parsedRows.map((item) => item.part_num).filter((item): item is string => Boolean(item))));
+      const catalogImageByPartNum = new Map<string, string | null>();
+      const colorRowsByPartNum = new Map<string, Array<{ color_name: string; part_img_url: string | null }>>();
+
+      if (partNums.length > 0) {
+        const [{ data: partsData }, { data: colorData }] = await Promise.all([
+          supabase.from("parts_catalog").select("part_num, part_img_url").in("part_num", partNums),
+          supabase.from("part_color_catalog").select("part_num, color_name, part_img_url").in("part_num", partNums),
+        ]);
+
+        (partsData ?? []).forEach((row) => {
+          const key = String(row.part_num ?? "");
+          if (!key) {
+            return;
+          }
+          catalogImageByPartNum.set(key, row.part_img_url ? String(row.part_img_url) : null);
+        });
+
+        (colorData ?? []).forEach((row) => {
+          const key = String(row.part_num ?? "");
+          const colorName = String(row.color_name ?? "").trim();
+          if (!key || !colorName) {
+            return;
+          }
+
+          if (!colorRowsByPartNum.has(key)) {
+            colorRowsByPartNum.set(key, []);
+          }
+
+          colorRowsByPartNum.get(key)?.push({
+            color_name: colorName,
+            part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+          });
+        });
+      }
+
+      const enrichedRows = parsedRows.map((item) => {
+        const partNum = item.part_num;
+        const colorLabel = item.display_color_label;
+        const colorRows = partNum ? (colorRowsByPartNum.get(partNum) ?? []) : [];
+        let colorImageUrl: string | null = null;
+
+        if (colorLabel && item.imgmatchcolor) {
+          const target = normalizeColorLabel(colorLabel);
+          const exact = colorRows.find((row) => normalizeColorLabel(row.color_name) === target);
+          if (exact?.part_img_url) {
+            colorImageUrl = exact.part_img_url;
+          } else {
+            const partial = colorRows.find((row) => {
+              const current = normalizeColorLabel(row.color_name);
+              return current.includes(target) || target.includes(current);
+            });
+            colorImageUrl = partial?.part_img_url ?? null;
+          }
+        }
+
+        const baseImage = partNum ? (catalogImageByPartNum.get(partNum) ?? null) : null;
+
+        return {
+          ...item,
+          part_img_url: colorImageUrl || baseImage,
+        };
+      });
+
+      setListItemsRows(enrichedRows);
       setItemQuantityInputs(
         parsedRows.reduce(
           (acc: Record<string, string>, item) => {
@@ -794,7 +1066,6 @@ export default function Home() {
     setSelectedListForItems(lista);
     setActiveSection("lista_detalle");
     setPartsSearchQuery("");
-    setPartsSearchCategoryId(null);
     setShowCategoriesPanel(false);
     setCategoriesPanelMode("categories");
     setSelectedPanelCategory(null);
@@ -805,13 +1076,64 @@ export default function Home() {
     setSelectedSearchPartNum(null);
     setPartsSearchResults([]);
     setPartsSearchQuery("");
-    setAddItemColorNameInput("");
+    setAddItemColorNameInput(NO_COLOR_LABEL);
     setAddItemColorMode("bricklink");
+    setShowColorDropdown(false);
+    setAddItemColorExists(true);
+    setPartAvailableColorNames([]);
+    setSelectedPartColorImageUrl(null);
+    setSelectedPartColorImageMissing(false);
     setAddItemQuantity(1);
     if (partsCategories.length === 0) {
       await loadPartsCategories();
     }
+    if (goBrickColors.length === 0) {
+      await loadGoBrickColors();
+    }
     await loadListItems(lista.id);
+  }
+
+  async function loadGoBrickColors() {
+    const response = await fetch("/api/gobrick-colors");
+    const json = (await response.json()) as {
+      error?: string;
+      colors?: GoBrickColorItem[];
+    };
+
+    if (!response.ok) {
+      setStatus(json.error || "No pudimos cargar los colores.");
+      return;
+    }
+
+    const parsedColors = Array.isArray(json.colors) ? json.colors : [];
+    setGoBrickColors(parsedColors);
+
+    setAddItemColorNameInput(NO_COLOR_LABEL);
+  }
+
+  function handleAddItemColorMode(mode: "bricklink" | "lego") {
+    setAddItemColorMode(mode);
+    setShowColorDropdown(false);
+    setPartAvailableColorNames([]);
+    setSelectedPartColorImageUrl(null);
+    setSelectedPartColorImageMissing(false);
+
+    const available = goBrickColors
+      .map((color) => (mode === "lego" ? color.lego : color.bricklink))
+      .filter((value): value is string => Boolean(value));
+
+    if (addItemColorNameInput === NO_COLOR_LABEL) {
+      return;
+    }
+
+    if (available.length === 0) {
+      setAddItemColorNameInput(NO_COLOR_LABEL);
+      return;
+    }
+
+    if (!available.includes(addItemColorNameInput)) {
+      setAddItemColorNameInput(available[0]);
+    }
   }
 
   function openRenameListaPanel(item: ListaItem) {
@@ -853,41 +1175,6 @@ export default function Home() {
     setListasSaving(false);
   }
 
-  async function searchPartsCatalog() {
-    if (!supabase) {
-      return;
-    }
-
-    setPartsSearchLoading(true);
-
-    const { data, error } = await supabase.rpc("search_parts_catalog", {
-      p_query: partsSearchQuery.trim() || null,
-      p_category_id: partsSearchCategoryId,
-      p_limit: 30,
-    });
-
-    if (error) {
-      setStatus(`${t.errorPrefix}: ${error.message}`);
-      setPartsSearchLoading(false);
-      return;
-    }
-
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
-    setPartsSearchResults(
-      rows.map((row) => ({
-        part_num: String(row.part_num ?? ""),
-        name: String(row.name ?? ""),
-        part_img_url: row.part_img_url ? String(row.part_img_url) : null,
-        category_id: row.category_id ? Number(row.category_id) : null,
-      })),
-    );
-
-    const firstPartNum = rows[0]?.part_num ? String(rows[0].part_num) : null;
-    setSelectedSearchPartNum(firstPartNum);
-
-    setPartsSearchLoading(false);
-  }
-
   async function loadPanelCategoryParts(category: PartCategoryItem, query = "") {
     setPanelPartsLoading(true);
     setSelectedPanelPartNum(null);
@@ -903,6 +1190,7 @@ export default function Home() {
         category_id: String(category.id),
         page: String(page),
         page_size: String(pageSize),
+        local_only: "1",
       });
 
       if (queryText) {
@@ -942,6 +1230,7 @@ export default function Home() {
       colorName?: string | null;
       quantity?: number;
       colorMode?: "bricklink" | "lego";
+      imgMatchColor?: boolean;
     },
   ) {
     if (!supabase || !selectedListForItems || !userId) {
@@ -951,7 +1240,9 @@ export default function Home() {
     const quantity = Math.max(1, Number(options?.quantity ?? 1));
     const cleanColor = String(options?.colorName ?? "").trim();
     const colorMode = options?.colorMode ?? "bricklink";
-    const colorName = cleanColor ? `${colorMode === "lego" ? "LEGO" : "BrickLink"}: ${cleanColor}` : null;
+    const colorName = cleanColor && cleanColor !== NO_COLOR_LABEL ? `${colorMode === "lego" ? "LEGO" : "BrickLink"}: ${cleanColor}` : null;
+    const hasSelectedColor = Boolean(cleanColor && cleanColor !== NO_COLOR_LABEL);
+    const imgMatchColor = hasSelectedColor ? Boolean(options?.imgMatchColor ?? false) : true;
 
     setListasSaving(true);
 
@@ -960,6 +1251,7 @@ export default function Home() {
       part_num: part.part_num,
       part_name: part.name,
       color_name: colorName,
+      imgmatchcolor: imgMatchColor,
       quantity,
     });
 
@@ -982,21 +1274,20 @@ export default function Home() {
       return;
     }
 
-    if (!addItemColorNameInput.trim()) {
-      setStatus("Completá el color antes de agregar el item.");
-      return;
-    }
-
     await addPartToList(selectedSearchPart, {
       colorName: addItemColorNameInput,
       quantity: addItemQuantity,
       colorMode: addItemColorMode,
+      imgMatchColor: !selectedPartColorImageMissing,
     });
 
     setPartsSearchQuery("");
     setPartsSearchResults([]);
     setSelectedSearchPartNum(null);
-    setAddItemColorNameInput("");
+    setPartAvailableColorNames([]);
+    setSelectedPartColorImageUrl(null);
+    setSelectedPartColorImageMissing(false);
+    setAddItemColorNameInput(NO_COLOR_LABEL);
     setAddItemQuantity(1);
   }
 
@@ -1004,6 +1295,9 @@ export default function Home() {
     setPartsSearchResults([part]);
     setSelectedSearchPartNum(part.part_num);
     setPartsSearchQuery(`${part.part_num} - ${part.name}`);
+    setPartAvailableColorNames([]);
+    setSelectedPartColorImageUrl(null);
+    setSelectedPartColorImageMissing(false);
     setShowCategoriesPanel(false);
     setCategoriesPanelMode("categories");
     setSelectedPanelCategory(null);
@@ -2530,9 +2824,8 @@ export default function Home() {
               </header>
 
               <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-3 sm:p-4">
-                <p className="font-boogaloo text-base font-semibold text-slate-900">Agregar item</p>
-
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[170px_minmax(0,1fr)]">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-boogaloo text-base font-semibold text-slate-900">Agregar item</p>
                   <button
                     type="button"
                     onClick={() => {
@@ -2545,81 +2838,167 @@ export default function Home() {
                   >
                     Categorias
                   </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-[72px_minmax(0,1fr)] grid-rows-2 gap-2 sm:grid-cols-[84px_minmax(0,1fr)]">
+                  <div className="relative row-span-2 flex h-[84px] w-[72px] items-center justify-center overflow-hidden rounded-md border border-slate-300 bg-white sm:w-[84px]">
+                    {selectedPartPreviewImage ? (
+                      <Image
+                        src={selectedPartPreviewImage}
+                        alt={selectedSearchPart?.name ?? "pieza"}
+                        width={56}
+                        height={56}
+                        unoptimized
+                        className="h-[72px] w-[72px] object-contain"
+                      />
+                    ) : (
+                      <span className="text-[11px] text-slate-400">Sin img</span>
+                    )}
+                    {showGenericColorImageWarning ? (
+                      <span
+                        className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
+                        title="Imagen de pieza generica, no hay imagen en el color elegido"
+                      >
+                        <Image
+                          src="/api/avatar/Exclamacion.svg"
+                          alt="Advertencia"
+                          width={16}
+                          height={16}
+                          unoptimized
+                          className="h-4 w-4 object-contain"
+                        />
+                      </span>
+                    ) : null}
+                  </div>
                   <input
                     type="text"
                     value={partsSearchQuery}
-                    onChange={(event) => setPartsSearchQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        void searchPartsCatalog();
-                      }
-                    }}
+                    readOnly
                     className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                    placeholder="Buscar por nombre o part_num"
+                    placeholder="Numero y nombre de pieza"
                   />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,320px)_auto_140px] sm:items-center">
+                    <div ref={colorDropdownRef} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowColorDropdown((prev) => !prev)}
+                        className="flex w-full items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 pr-[136px] text-left text-sm"
+                      >
+                        <span
+                          className="h-3.5 w-3.5 rounded-sm border border-slate-300"
+                          style={{ backgroundColor: selectedColorHex ? `#${selectedColorHex}` : "#ffffff" }}
+                        />
+                        <span className="truncate">{addItemColorNameInput || "Seleccionar color"}</span>
+                      </button>
+                      {showColorDropdown ? (
+                        <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-52 w-full overflow-auto rounded-md border border-slate-300 bg-white p-1 shadow-lg">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAddItemColorNameInput(NO_COLOR_LABEL);
+                              setSelectedPartColorImageUrl(null);
+                              setSelectedPartColorImageMissing(false);
+                              setShowColorDropdown(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-slate-100"
+                          >
+                            <span className="h-3.5 w-3.5 rounded-sm border border-slate-300 bg-white" />
+                            <span className="truncate">{NO_COLOR_LABEL}</span>
+                          </button>
+                          {visibleColorOptions.map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => {
+                                setAddItemColorNameInput(option.label);
+                                setSelectedPartColorImageMissing(false);
+                                setShowColorDropdown(false);
+                              }}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-slate-100"
+                            >
+                              <span
+                                className="h-3.5 w-3.5 rounded-sm border border-slate-300"
+                                style={{ backgroundColor: option.hex ? `#${option.hex}` : "#ffffff" }}
+                              />
+                              <span className="truncate">{option.label}</span>
+                              {!option.lego_available ? <span className="text-[10px] text-slate-500">(Color no LEGO)</span> : null}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleAddItemColorMode("bricklink")}
+                          className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${
+                            addItemColorMode === "bricklink" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          BrickLink
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAddItemColorMode("lego")}
+                          className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${
+                            addItemColorMode === "lego" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          LEGO
+                        </button>
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={addItemColorExists}
+                        onChange={(event) => {
+                          const next = event.target.checked;
+                          setAddItemColorExists(next);
+                          setShowColorDropdown(false);
+                          if (!next) {
+                            setPartAvailableColorNames([]);
+                          }
+                        }}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span>pieza en color existente</span>
+                    </label>
+
+                    <div className="flex items-center overflow-hidden rounded-md border border-slate-300 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setAddItemQuantity((prev) => Math.max(1, prev - 1))}
+                        className="h-full px-3 text-base font-semibold text-slate-700"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min={1}
+                        value={addItemQuantity}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          setAddItemQuantity(Number.isFinite(next) && next > 0 ? Math.floor(next) : 1);
+                        }}
+                        className="w-full border-x border-slate-300 px-2 py-2 text-center text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setAddItemQuantity((prev) => prev + 1)}
+                        className="h-full px-3 text-base font-semibold text-slate-700"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px_200px_auto]">
-                  <input
-                    type="text"
-                    value={addItemColorNameInput}
-                    onChange={(event) => setAddItemColorNameInput(event.target.value)}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                    placeholder="Color"
-                  />
-
-                  <div className="flex items-center overflow-hidden rounded-md border border-slate-300 bg-white">
-                    <button
-                      type="button"
-                      onClick={() => setAddItemQuantity((prev) => Math.max(1, prev - 1))}
-                      className="h-full px-3 text-base font-semibold text-slate-700"
-                    >
-                      -
-                    </button>
-                    <input
-                      type="number"
-                      min={1}
-                      value={addItemQuantity}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        setAddItemQuantity(Number.isFinite(next) && next > 0 ? Math.floor(next) : 1);
-                      }}
-                      className="w-full border-x border-slate-300 px-2 py-2 text-center text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setAddItemQuantity((prev) => prev + 1)}
-                      className="h-full px-3 text-base font-semibold text-slate-700"
-                    >
-                      +
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 overflow-hidden rounded-md border border-slate-300 bg-white">
-                    <button
-                      type="button"
-                      onClick={() => setAddItemColorMode("bricklink")}
-                      className={`px-3 py-2 text-xs font-semibold ${
-                        addItemColorMode === "bricklink" ? "bg-slate-900 text-white" : "text-slate-700"
-                      }`}
-                    >
-                      BrickLink
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAddItemColorMode("lego")}
-                      className={`border-l border-slate-300 px-3 py-2 text-xs font-semibold ${
-                        addItemColorMode === "lego" ? "bg-slate-900 text-white" : "text-slate-700"
-                      }`}
-                    >
-                      LEGO
-                    </button>
-                  </div>
-
+                <div className="mt-3 flex justify-end">
                   <button
                     type="button"
                     onClick={() => void addSelectedPartToList()}
-                    disabled={!selectedSearchPart || !addItemColorNameInput.trim()}
+                    disabled={!selectedSearchPart}
                     className="rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60"
                     style={{ backgroundColor: uiColor1, color: uiColor1Text }}
                   >
@@ -2649,40 +3028,88 @@ export default function Home() {
                     ) : (
                       listItemsRows.map((row) => (
                         <div key={row.item_id} className="rounded-md border border-slate-200 px-2 py-2">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-900">{row.part_num || "-"}</p>
-                              <p className="text-xs text-slate-600">{row.part_name || "Sin nombre"}</p>
-                              <p className="text-[11px] text-slate-500">{row.color_name || "Sin color"}</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => void deleteListItem(row.item_id)}
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
-                              title="Eliminar lote"
+                          <div className="flex items-start gap-2">
+                            <div
+                              className={`relative flex h-[64px] w-[64px] items-center justify-center overflow-hidden rounded-md border bg-white ${
+                                row.imgmatchcolor ? "border-slate-300" : "border-2 border-red-500"
+                              }`}
                             >
-                              🗑
-                            </button>
-                          </div>
+                              {row.part_img_url ? (
+                                <Image
+                                  src={row.part_img_url}
+                                  alt={row.part_name || row.part_num || "pieza"}
+                                  width={56}
+                                  height={56}
+                                  unoptimized
+                                  className="h-[56px] w-[56px] object-contain"
+                                />
+                              ) : (
+                                <span className="text-[10px] text-slate-400">Sin img</span>
+                              )}
+                              {!row.imgmatchcolor ? (
+                                <span
+                                  className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
+                                  title="Imagen de pieza generica, no hay imagen en el color elegido"
+                                >
+                                  <Image
+                                    src="/api/avatar/Exclamacion.svg"
+                                    alt="Advertencia"
+                                    width={16}
+                                    height={16}
+                                    unoptimized
+                                    className="h-4 w-4 object-contain"
+                                  />
+                                </span>
+                              ) : null}
+                            </div>
 
-                          <div className="mt-2 flex items-center gap-2">
-                            <span className="text-[11px] text-slate-500">Cantidad</span>
-                            <input
-                              type="number"
-                              min={1}
-                              value={itemQuantityInputs[row.item_id] ?? String(row.quantity)}
-                              onChange={(event) => {
-                                const raw = event.target.value;
-                                setItemQuantityInputs((prev) => ({ ...prev, [row.item_id]: raw }));
-                              }}
-                              onBlur={() => void saveListItemQuantity(row.item_id)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  void saveListItemQuantity(row.item_id);
-                                }
-                              }}
-                              className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs"
-                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="truncate text-xs font-semibold text-slate-900">{`${row.part_num || "-"} - ${row.part_name || "Sin nombre"}`}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteListItem(row.item_id)}
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
+                                  title="Eliminar lote"
+                                >
+                                  🗑
+                                </button>
+                              </div>
+
+                              <div className="mt-2 flex items-center gap-2">
+                                <span
+                                  className="inline-flex max-w-[220px] items-center truncate rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                  style={(() => {
+                                    const hex = row.display_color_label ? colorHexByLabel.get(normalizeColorLabel(row.display_color_label)) : null;
+                                    const bg = hex ? `#${hex}` : "#f8fafc";
+                                    return {
+                                      backgroundColor: bg,
+                                      color: hex ? getContrastTextColor(bg) : "#334155",
+                                      borderColor: hex ? "transparent" : "#cbd5e1",
+                                    };
+                                  })()}
+                                >
+                                  {row.display_color_label || NO_COLOR_LABEL}
+                                </span>
+
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={itemQuantityInputs[row.item_id] ?? String(row.quantity)}
+                                  onChange={(event) => {
+                                    const raw = event.target.value;
+                                    setItemQuantityInputs((prev) => ({ ...prev, [row.item_id]: raw }));
+                                  }}
+                                  onBlur={() => void saveListItemQuantity(row.item_id)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      void saveListItemQuantity(row.item_id);
+                                    }
+                                  }}
+                                  className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                />
+                              </div>
+                            </div>
                           </div>
                         </div>
                       ))
@@ -2915,11 +3342,10 @@ export default function Home() {
                             key={cat.id}
                             type="button"
                             onClick={() => {
-                              setPartsSearchCategoryId(cat.id);
                               setSelectedPanelCategory(cat);
                               setCategoriesPanelMode("parts");
                               setPanelPartsPage(1);
-                              void loadPanelCategoryParts(cat, partsSearchQuery);
+                              void loadPanelCategoryParts(cat, "");
                             }}
                             className="w-full rounded-md border border-slate-200 px-3 py-2 text-left text-slate-800 hover:bg-slate-50"
                           >

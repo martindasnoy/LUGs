@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "sync:rebrickable:categories": "node scripts/sync-rebrickable-categories.mjs",
-    "sync:rebrickable:parts": "node scripts/sync-rebrickable-parts.mjs"
+    "sync:rebrickable:parts": "node scripts/sync-rebrickable-parts.mjs",
+    "sync:rebrickable:parts:watchdog": "node scripts/sync-rebrickable-parts-watchdog.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

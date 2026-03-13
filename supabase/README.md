@@ -52,6 +52,10 @@
   - Creates `lists` and `list_items` tables with RLS policies.
 - `supabase/migrations/0025_create_parts_catalog_and_search_rpc.sql`
   - Adds local parts catalog, categories, and search RPC for list item picker.
+- `supabase/migrations/0026_create_part_color_catalog.sql`
+  - Adds local cache table for per-part color availability and color-specific images.
+- `supabase/migrations/0027_add_imgmatchcolor_to_list_items.sql`
+  - Adds persisted `imgmatchcolor` flag in `list_items` to avoid recalculating color-image match at runtime.
 
 ## How to run in Supabase dashboard
 
@@ -81,6 +85,8 @@
 24. Run `0023_fix_app_maintenance_rls_insert.sql`.
 25. Run `0024_create_lists_and_list_items.sql`.
 26. Run `0025_create_parts_catalog_and_search_rpc.sql`.
+27. Run `0026_create_part_color_catalog.sql`.
+28. Run `0027_add_imgmatchcolor_to_list_items.sql`.
 
 ## Notes
 

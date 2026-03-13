@@ -1,0 +1,30 @@
+[OK] Lista detalle: titulo con tipo + nombre, visibilidad, lotes y piezas arriba de la linea.
+[OK] Lista detalle: seccion Agregar item + seccion Items de la lista.
+[OK] Boton Exportar de ancho completo (color1).
+[OK] Popup Catalogo: titulo, filtros (All/Popular/Minifig/Technic/Otros), cerrar.
+[OK] Popup Piezas: volver a categorias, nombre categoria, filtros impresas/no impresas, paginacion y cerrar.
+[OK] Paginacion despues de filtrar (filtro primero, paginacion despues).
+[OK] Seleccionar pieza en popup piezas y llevarla a Agregar item.
+[OK] Agregar item solo cuando hay pieza + color.
+[OK] Items de la lista: borrar lote (basura) y editar cantidad.
+[OK] Tipografia Chewy aplicada en titulos pedidos.
+[OK] Color como desplegable con cuadrado HEX visible.
+[OK] Dropdown de color se cierra al click afuera.
+[OK] Colores con lego_available=FALSE muestran etiqueta "(Color no LEGO)".
+[OK] Checkbox "pieza en color existente" en linea de color.
+
+[TODO] Buscador de piezas (definir y cerrar UX final del buscador principal).
+[TODO] Paginas independientes (/dashboard, /listas, /listas/[id], etc.).
+[TODO] Agregado de piezas: terminar flujo final de colores e imagenes (detalles UX finales).
+[TODO] Exportar: implementar logica real (CSV/BrickLink/XML a definir).
+[TODO] Confirmacion visual al agregar item (toast/estado visible y consistente).
+[TODO] Validar comportamiento mobile completo en lista detalle y popups.
+[TODO] Revisar si el checkbox "pieza en color existente" debe guardarse en DB.
+[TODO] Definir y documentar formato final de color_name guardado en list_items.
+[TODO] Chequear tipografias (todas las pantallas y popups).
+[TODO] Limpieza tecnica: separar app/page.tsx en componentes/paginas mas chicas.
+[TODO] Deploy final despues de cerrar pendientes funcionales.
+
+Regla de seguimiento:
+- No borrar lineas.
+- Marcar [OK] cuando se completa una tarea.

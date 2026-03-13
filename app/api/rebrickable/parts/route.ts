@@ -85,8 +85,21 @@ export async function GET(request: NextRequest) {
   const page = Number(searchParams.get("page") || "1");
   const pageSize = Number(searchParams.get("page_size") || "20");
   const query = searchParams.get("q") || "";
+  const localOnly = searchParams.get("local_only") === "1";
 
   const localResult = await queryLocalCatalog(categoryId, query, page, pageSize);
+  if (localOnly) {
+    return NextResponse.json({
+      count: localResult?.count ?? 0,
+      next: null,
+      previous: null,
+      page,
+      page_size: pageSize,
+      source: "local_only",
+      results: localResult?.results ?? [],
+    });
+  }
+
   if (localResult && localResult.results.length > 0) {
     return NextResponse.json({
       count: localResult.count,
