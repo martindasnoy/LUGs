@@ -15,13 +15,13 @@
 
 [TODO] Buscador de piezas (definir y cerrar UX final del buscador principal).
 [TODO] Paginas independientes (/dashboard, /listas, /listas/[id], etc.).
-[TODO] Agregado de piezas: terminar flujo final de colores e imagenes (detalles UX finales).
+[OK] Agregado de piezas: terminar flujo final de colores e imagenes (detalles UX finales).
 [TODO] Exportar: implementar logica real (CSV/BrickLink/XML a definir).
 [TODO] Confirmacion visual al agregar item (toast/estado visible y consistente).
 [TODO] Validar comportamiento mobile completo en lista detalle y popups.
 [TODO] Revisar si el checkbox "pieza en color existente" debe guardarse en DB.
 [TODO] Definir y documentar formato final de color_name guardado en list_items.
-[TODO] Chequear tipografias (todas las pantallas y popups).
+[OK] Chequear tipografias (todas las pantallas y popups).
 [TODO] Limpieza tecnica: separar app/page.tsx en componentes/paginas mas chicas.
 [TODO] Deploy final despues de cerrar pendientes funcionales.
 

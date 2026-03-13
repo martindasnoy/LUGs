@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import Lottie from "lottie-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { type UiLanguage, uiLanguageLabels, uiLanguages, uiTranslations } from "@/lib/i18n/ui";
@@ -130,6 +131,96 @@ function parseStoredColorLabel(value: string | null) {
   return clean.replace(/^lego:\s*/i, "").replace(/^bricklink:\s*/i, "").trim() || null;
 }
 
+function formatPartLabel(part: Pick<PartCatalogItem, "part_num" | "name">) {
+  return `${part.part_num} - ${part.name}`;
+}
+
+function normalizeDimensionText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\s*x\s*/g, "x")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSearchVariants(raw: string) {
+  const base = raw.trim();
+  const compact = base.replace(/\s*x\s*/gi, "x").replace(/\s+/g, " ").trim();
+  const spaced = base.replace(/\s*x\s*/gi, " x ").replace(/\s+/g, " ").trim();
+  return Array.from(new Set([base, compact, spaced].filter((value) => value.length > 0)));
+}
+
+function extractSearchTokens(raw: string) {
+  return normalizeDimensionText(raw)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+function tokenMatchesSearchText(searchText: string, token: string) {
+  if (searchText.includes(token)) {
+    return true;
+  }
+
+  const compactSearch = searchText.replace(/\s+/g, "");
+  const compactToken = token.replace(/\s+/g, "");
+  return compactSearch.includes(compactToken);
+}
+
+function isPrintedPart(part: Pick<PartCatalogItem, "part_num" | "name" | "is_printed">) {
+  if (typeof part.is_printed === "boolean") {
+    return part.is_printed;
+  }
+  const code = String(part.part_num ?? "").toLowerCase();
+  const title = String(part.name ?? "").toLowerCase();
+  return /pb|pr|pat/.test(code) || title.includes("pattern") || title.includes("printed");
+}
+
+function scoreSearchResult(part: PartCatalogItem, normalizedQuery: string, tokens: string[]) {
+  const code = part.part_num.toLowerCase();
+  const name = part.name.toLowerCase();
+  const normalizedName = normalizeDimensionText(name);
+  const normalizedSearchText = normalizeDimensionText(`${part.part_num} ${part.name}`);
+
+  let score = 0;
+  if (code === normalizedQuery || code === normalizedQuery.replace(/^#/, "")) {
+    score += 120;
+  } else if (code.startsWith(normalizedQuery.replace(/^#/, ""))) {
+    score += 80;
+  } else if (code.includes(normalizedQuery.replace(/^#/, ""))) {
+    score += 40;
+  }
+
+  if (normalizedName.includes(normalizedQuery)) {
+    score += 60;
+  } else if (name.includes(normalizedQuery)) {
+    score += 40;
+  }
+
+  const tokenMatches = tokens.reduce((acc, token) => (normalizedSearchText.includes(token) ? acc + 1 : acc), 0);
+  score += tokenMatches * 20;
+
+  if (!isPrintedPart(part)) {
+    score += 30;
+  }
+
+  if (normalizedName.includes("modulex")) {
+    score -= 120;
+  }
+  if (normalizedName.includes("duplo")) {
+    score -= 120;
+  }
+  if (normalizedName.includes("print") || normalizedName.includes("printed")) {
+    score -= 80;
+  }
+  if (/\bno\.\s*\d+/i.test(name)) {
+    score -= 80;
+  }
+
+  score += Math.max(0, 30 - Math.min(30, part.name.length));
+  return score;
+}
+
 type ListPartItem = {
   item_id: string;
   part_num: string | null;
@@ -155,8 +246,14 @@ const DEFAULT_LOADING_PHRASES = [
   "Pegando stickers en un quesito",
 ];
 
-export default function Home() {
+type HomeProps = {
+  initialSection?: AppSection;
+  initialListId?: string;
+};
+
+export default function Home({ initialSection, initialListId }: HomeProps = {}) {
   const supabase = getSupabaseClient();
+  const router = useRouter();
   const [mode, setMode] = useState<Mode>("login");
   const [language, setLanguage] = useState<UiLanguage>(() => {
     if (typeof window === "undefined") {
@@ -285,6 +382,10 @@ export default function Home() {
   const [currentLugLogoDataUrl, setCurrentLugLogoDataUrl] = useState<string | null>(null);
   const [legacyLogosBackfillRunning, setLegacyLogosBackfillRunning] = useState(false);
   const [activeSection, setActiveSection] = useState<AppSection>(() => {
+    if (initialSection) {
+      return initialSection;
+    }
+
     if (typeof window === "undefined") {
       return "dashboard";
     }
@@ -309,6 +410,8 @@ export default function Home() {
   const [partsCategories, setPartsCategories] = useState<PartCategoryItem[]>([]);
   const [partsSearchQuery, setPartsSearchQuery] = useState("");
   const [partsSearchResults, setPartsSearchResults] = useState<PartCatalogItem[]>([]);
+  const [partsSearchLoading, setPartsSearchLoading] = useState(false);
+  const [showPartSearchDropdown, setShowPartSearchDropdown] = useState(false);
   const [goBrickColors, setGoBrickColors] = useState<GoBrickColorItem[]>([]);
   const [showCategoriesPanel, setShowCategoriesPanel] = useState(false);
   const [categoriesPanelMode, setCategoriesPanelMode] = useState<CategoriesPanelMode>("categories");
@@ -336,6 +439,7 @@ export default function Home() {
   const [selectedPartColorImageMissing, setSelectedPartColorImageMissing] = useState(false);
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({});
   const colorDropdownRef = useRef<HTMLDivElement | null>(null);
+  const partSearchDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -488,19 +592,22 @@ export default function Home() {
     panelPartsLoading;
 
   useEffect(() => {
-    if (!showColorDropdown) {
+    if (!showColorDropdown && !showPartSearchDropdown) {
       return;
     }
 
     function handleOutsideClick(event: MouseEvent) {
-      if (colorDropdownRef.current && !colorDropdownRef.current.contains(event.target as Node)) {
+      if (showColorDropdown && colorDropdownRef.current && !colorDropdownRef.current.contains(event.target as Node)) {
         setShowColorDropdown(false);
+      }
+      if (showPartSearchDropdown && partSearchDropdownRef.current && !partSearchDropdownRef.current.contains(event.target as Node)) {
+        setShowPartSearchDropdown(false);
       }
     }
 
     document.addEventListener("mousedown", handleOutsideClick);
     return () => document.removeEventListener("mousedown", handleOutsideClick);
-  }, [showColorDropdown]);
+  }, [showColorDropdown, showPartSearchDropdown]);
 
   useEffect(() => {
     if (!addItemColorExists) {
@@ -544,6 +651,110 @@ export default function Home() {
       cancelled = true;
     };
   }, [addItemColorExists, selectedSearchPart?.part_num, addItemColorMode, addItemColorNameInput]);
+
+  useEffect(() => {
+    const raw = partsSearchQuery.trim();
+    const normalized = raw.startsWith("#") ? raw.slice(1).trim() : raw;
+    const normalizedForMatch = normalizeDimensionText(normalized);
+    const tokens = extractSearchTokens(normalizedForMatch);
+
+    if (normalizedForMatch.length < 3) {
+      setPartsSearchResults(selectedSearchPart ? [selectedSearchPart] : []);
+      setPartsSearchLoading(false);
+      setShowPartSearchDropdown(false);
+      return;
+    }
+
+    if (selectedSearchPart && raw === formatPartLabel(selectedSearchPart)) {
+      setPartsSearchResults([selectedSearchPart]);
+      setPartsSearchLoading(false);
+      setShowPartSearchDropdown(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setPartsSearchLoading(true);
+      try {
+        const phraseVariants = buildSearchVariants(normalized);
+        const tokenVariants = Array.from(new Set(tokens.flatMap((token) => buildSearchVariants(token))));
+        const variants = Array.from(new Set([...phraseVariants, ...tokenVariants]));
+        const responses = await Promise.all(
+          variants.map(async (variant) => {
+            const candidatePages = [1, 2, 3, 4];
+            const chunks = await Promise.all(candidatePages.map(async (pageNum) => {
+              const params = new URLSearchParams({
+                local_only: "1",
+                page: String(pageNum),
+                page_size: "250",
+                q: variant,
+              });
+              const response = await fetch(`/api/rebrickable/parts?${params.toString()}`);
+              const json = (await response.json()) as { results?: PartCatalogItem[] };
+              return Array.isArray(json.results) ? json.results : [];
+            }));
+
+            const byPartNum = new Map<string, PartCatalogItem>();
+            chunks.flat().forEach((part) => {
+              byPartNum.set(part.part_num, part);
+            });
+
+            return Array.from(byPartNum.values())
+              .sort((a, b) => {
+                if (a.name.length !== b.name.length) {
+                  return a.name.length - b.name.length;
+                }
+                return a.name.localeCompare(b.name);
+              })
+              .slice(0, 500);
+          }),
+        );
+        if (cancelled) {
+          return;
+        }
+
+        const byPartNum = new Map<string, PartCatalogItem>();
+        responses.flat().forEach((part) => {
+          byPartNum.set(part.part_num, part);
+        });
+
+        const tokenFiltered = Array.from(byPartNum.values()).filter((part) => {
+          const searchText = normalizeDimensionText(`${part.part_num} ${part.name}`);
+          return tokens.every((token) => tokenMatchesSearchText(searchText, token));
+        });
+
+        const ranked = tokenFiltered
+          .sort((a, b) => {
+            const scoreDiff = scoreSearchResult(b, normalizedForMatch, tokens) - scoreSearchResult(a, normalizedForMatch, tokens);
+            if (scoreDiff !== 0) {
+              return scoreDiff;
+            }
+            if (a.name.length !== b.name.length) {
+              return a.name.length - b.name.length;
+            }
+            return a.part_num.localeCompare(b.part_num);
+          })
+          .slice(0, 20);
+
+        setPartsSearchResults(ranked);
+        setShowPartSearchDropdown(ranked.length > 0);
+      } catch {
+        if (!cancelled) {
+          setPartsSearchResults([]);
+          setShowPartSearchDropdown(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setPartsSearchLoading(false);
+        }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [partsSearchQuery, selectedSearchPart]);
 
   useEffect(() => {
     const partNum = selectedSearchPart?.part_num;
@@ -946,10 +1157,13 @@ export default function Home() {
     );
   }, [supabase, t.errorPrefix]);
 
-  const openListasSection = useCallback(async () => {
+  const openListasSection = useCallback(async (options?: { navigate?: boolean }) => {
+    if (options?.navigate !== false) {
+      router.push("/listas");
+    }
     setActiveSection("listas");
     await Promise.all([loadListasFromDb(), loadPartsCategories()]);
-  }, [loadListasFromDb, loadPartsCategories]);
+  }, [loadListasFromDb, loadPartsCategories, router]);
 
   const loadListItems = useCallback(
     async (listId: string) => {
@@ -1062,37 +1276,6 @@ export default function Home() {
     [supabase, t.errorPrefix, userId],
   );
 
-  async function openListDetailPage(lista: ListaItem) {
-    setSelectedListForItems(lista);
-    setActiveSection("lista_detalle");
-    setPartsSearchQuery("");
-    setShowCategoriesPanel(false);
-    setCategoriesPanelMode("categories");
-    setSelectedPanelCategory(null);
-    setPanelPartsPage(1);
-    setPanelPartsResults([]);
-    setPanelPrintFilters({ no_printed: true, printed: false });
-    setSelectedPanelPartNum(null);
-    setSelectedSearchPartNum(null);
-    setPartsSearchResults([]);
-    setPartsSearchQuery("");
-    setAddItemColorNameInput(NO_COLOR_LABEL);
-    setAddItemColorMode("bricklink");
-    setShowColorDropdown(false);
-    setAddItemColorExists(true);
-    setPartAvailableColorNames([]);
-    setSelectedPartColorImageUrl(null);
-    setSelectedPartColorImageMissing(false);
-    setAddItemQuantity(1);
-    if (partsCategories.length === 0) {
-      await loadPartsCategories();
-    }
-    if (goBrickColors.length === 0) {
-      await loadGoBrickColors();
-    }
-    await loadListItems(lista.id);
-  }
-
   async function loadGoBrickColors() {
     const response = await fetch("/api/gobrick-colors");
     const json = (await response.json()) as {
@@ -1110,6 +1293,93 @@ export default function Home() {
 
     setAddItemColorNameInput(NO_COLOR_LABEL);
   }
+
+  const openListDetailPage = useCallback(
+    async (lista: ListaItem, options?: { navigate?: boolean }) => {
+      if (options?.navigate !== false) {
+        router.push(`/listas/${lista.id}`);
+      }
+      setSelectedListForItems(lista);
+      setActiveSection("lista_detalle");
+      setPartsSearchQuery("");
+      setShowCategoriesPanel(false);
+      setCategoriesPanelMode("categories");
+      setSelectedPanelCategory(null);
+      setPanelPartsPage(1);
+      setPanelPartsResults([]);
+      setPanelPrintFilters({ no_printed: true, printed: false });
+      setSelectedPanelPartNum(null);
+      setSelectedSearchPartNum(null);
+      setPartsSearchResults([]);
+      setPartsSearchQuery("");
+      setPartsSearchLoading(false);
+      setShowPartSearchDropdown(false);
+      setAddItemColorNameInput(NO_COLOR_LABEL);
+      setAddItemColorMode("bricklink");
+      setShowColorDropdown(false);
+      setAddItemColorExists(true);
+      setPartAvailableColorNames([]);
+      setSelectedPartColorImageUrl(null);
+      setSelectedPartColorImageMissing(false);
+      setAddItemQuantity(1);
+      if (partsCategories.length === 0) {
+        await loadPartsCategories();
+      }
+      if (goBrickColors.length === 0) {
+        await loadGoBrickColors();
+      }
+      await loadListItems(lista.id);
+    },
+    [goBrickColors.length, loadListItems, loadPartsCategories, partsCategories.length, router],
+  );
+
+  const openListDetailById = useCallback(
+    async (listId: string, ownerIdOverride?: string | null) => {
+      const ownerId = ownerIdOverride ?? userId;
+      if (!supabase || !ownerId) {
+        return;
+      }
+
+      let { data, error } = await supabase
+        .from("lists")
+        .select("list_id, name, list_type, is_public")
+        .eq("list_id", listId)
+        .eq("owner_id", ownerId)
+        .maybeSingle();
+
+      if (!data) {
+        const fallback = listasItems.find((item) => item.id === listId);
+        if (fallback) {
+          await openListDetailPage(fallback, { navigate: false });
+          return;
+        }
+      }
+
+      if (!data) {
+        const retry = await supabase.from("lists").select("list_id, name, list_type, is_public").eq("list_id", listId).maybeSingle();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error || !data) {
+        setStatus("No pudimos abrir esa lista.");
+        setActiveSection("listas");
+        return;
+      }
+
+      const lista: ListaItem = {
+        id: String(data.list_id ?? ""),
+        nombre: String(data.name ?? ""),
+        tipo: data.list_type === "venta" ? "venta" : "deseos",
+        piezas: 0,
+        lotes: 0,
+        visibilidad: data.is_public ? "publico" : "privado",
+      };
+
+      await openListDetailPage(lista, { navigate: false });
+    },
+    [listasItems, openListDetailPage, supabase, userId],
+  );
 
   function handleAddItemColorMode(mode: "bricklink" | "lego") {
     setAddItemColorMode(mode);
@@ -1283,6 +1553,8 @@ export default function Home() {
 
     setPartsSearchQuery("");
     setPartsSearchResults([]);
+    setPartsSearchLoading(false);
+    setShowPartSearchDropdown(false);
     setSelectedSearchPartNum(null);
     setPartAvailableColorNames([]);
     setSelectedPartColorImageUrl(null);
@@ -1291,16 +1563,19 @@ export default function Home() {
     setAddItemQuantity(1);
   }
 
-  function selectPartForAddItem(part: PartCatalogItem) {
+  function selectPartForAddItem(part: PartCatalogItem, options?: { closeCatalog?: boolean }) {
     setPartsSearchResults([part]);
     setSelectedSearchPartNum(part.part_num);
-    setPartsSearchQuery(`${part.part_num} - ${part.name}`);
+    setPartsSearchQuery(formatPartLabel(part));
+    setShowPartSearchDropdown(false);
     setPartAvailableColorNames([]);
     setSelectedPartColorImageUrl(null);
     setSelectedPartColorImageMissing(false);
-    setShowCategoriesPanel(false);
-    setCategoriesPanelMode("categories");
-    setSelectedPanelCategory(null);
+    if (options?.closeCatalog !== false) {
+      setShowCategoriesPanel(false);
+      setCategoriesPanelMode("categories");
+      setSelectedPanelCategory(null);
+    }
   }
 
   async function deleteListItem(itemId: string) {
@@ -1673,9 +1948,6 @@ export default function Home() {
       if (user?.id) {
         await loadUserState(user.id, user.email ?? null);
         await loadMaintenanceSettings();
-        if (activeSection === "listas") {
-          await openListasSection();
-        }
       } else {
         setUserId(null);
         setUserEmail(null);
@@ -1724,9 +1996,6 @@ export default function Home() {
         if (session?.user?.id) {
           await loadUserState(session.user.id, session.user.email ?? null);
           await loadMaintenanceSettings();
-          if (activeSection === "listas") {
-            await openListasSection();
-          }
         } else {
           setUserId(null);
           setUserEmail(null);
@@ -1767,7 +2036,18 @@ export default function Home() {
     });
 
     return () => subscription.unsubscribe();
-  }, [activeSection, loadMaintenanceSettings, loadUserState, openListasSection, startBootLoading, supabase]);
+  }, [loadMaintenanceSettings, loadUserState, router, startBootLoading, supabase]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (activeSection !== "listas") {
+      return;
+    }
+
+    void openListasSection({ navigate: false });
+  }, [activeSection, openListasSection, userId]);
 
   useEffect(() => {
     if (!userId || !isMaster) {
@@ -1904,6 +2184,31 @@ export default function Home() {
 
     window.localStorage.setItem("active_section_v1", activeSection === "lista_detalle" ? "listas" : activeSection);
   }, [activeSection]);
+
+  useEffect(() => {
+    if (!initialListId) {
+      return;
+    }
+    if (!userId) {
+      return;
+    }
+    if (selectedListForItems?.id === initialListId) {
+      return;
+    }
+    if (activeSection !== "listas") {
+      return;
+    }
+
+    const fromMemory = listasItems.find((item) => item.id === initialListId);
+    if (fromMemory) {
+      void openListDetailPage(fromMemory, { navigate: false });
+      return;
+    }
+
+    if (!listasLoading) {
+      void openListDetailById(initialListId, userId);
+    }
+  }, [activeSection, initialListId, listasItems, listasLoading, openListDetailById, openListDetailPage, selectedListForItems?.id, userId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2797,6 +3102,16 @@ export default function Home() {
   }
 
   if (userEmail) {
+    if (activeSection === "lista_detalle" && !selectedListForItems) {
+      return (
+        <main className="bg-lego-tile min-h-screen">
+          <div className="flex min-h-screen items-center justify-center">
+            <p className="font-cubano-title text-3xl font-semibold text-white">Cargando lista...</p>
+          </div>
+        </main>
+      );
+    }
+
     if (activeSection === "lista_detalle" && selectedListForItems) {
       const listTypeLabel = selectedListForItems.tipo === "deseos" ? "deseos" : "venta";
       const visibilityLabel = selectedListForItems.visibilidad === "publico" ? "Publica" : "Privada";
@@ -2812,7 +3127,9 @@ export default function Home() {
                   <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{`Lista de ${listTypeLabel} ${selectedListForItems.nombre}`}</h2>
                   <button
                     type="button"
-                    onClick={() => setActiveSection("listas")}
+                    onClick={() => {
+                      void openListasSection();
+                    }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
                     Volver
@@ -2870,13 +3187,61 @@ export default function Home() {
                       </span>
                     ) : null}
                   </div>
-                  <input
-                    type="text"
-                    value={partsSearchQuery}
-                    readOnly
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                    placeholder="Numero y nombre de pieza"
-                  />
+                  <div ref={partSearchDropdownRef} className="relative">
+                    <input
+                      type="text"
+                      value={partsSearchQuery}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setPartsSearchQuery(next);
+                        const currentLabel = selectedSearchPart ? formatPartLabel(selectedSearchPart) : "";
+                        if (next !== currentLabel) {
+                          setSelectedSearchPartNum(null);
+                          setSelectedPartColorImageUrl(null);
+                          setSelectedPartColorImageMissing(false);
+                        }
+                      }}
+                      onFocus={() => {
+                        if (partsSearchResults.length > 0 && partsSearchQuery.trim().length >= 3) {
+                          setShowPartSearchDropdown(true);
+                        }
+                      }}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Buscar pieza por nombre, codigo o #codigo"
+                    />
+                    {partsSearchLoading ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">Buscando...</span> : null}
+                    {showPartSearchDropdown ? (
+                      <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-52 w-full overflow-auto rounded-md border border-slate-300 bg-white p-1 shadow-lg">
+                        {partsSearchResults.length === 0 ? (
+                          <p className="px-2 py-1 text-xs text-slate-500">Sin resultados.</p>
+                        ) : (
+                          partsSearchResults.map((part) => (
+                            <button
+                              key={`search-${part.part_num}`}
+                              type="button"
+                              onClick={() => selectPartForAddItem(part, { closeCatalog: false })}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-100"
+                            >
+                              <span className="flex h-7 w-7 items-center justify-center overflow-hidden rounded border border-slate-200 bg-white">
+                                {part.part_img_url ? (
+                                  <Image
+                                    src={part.part_img_url}
+                                    alt={part.name}
+                                    width={24}
+                                    height={24}
+                                    unoptimized
+                                    className="h-6 w-6 object-contain"
+                                  />
+                                ) : null}
+                              </span>
+                              <span className="text-xs font-semibold text-slate-800">{part.part_num}</span>
+                              <span className="truncate text-xs text-slate-600">{part.name}</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,320px)_auto_140px] sm:items-center">
                     <div ref={colorDropdownRef} className="relative">
                       <button
@@ -3384,7 +3749,10 @@ export default function Home() {
                   <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">Listas</h2>
                   <button
                     type="button"
-                    onClick={() => setActiveSection("dashboard")}
+                    onClick={() => {
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
                     Volver
