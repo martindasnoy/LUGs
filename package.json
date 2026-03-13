@@ -6,10 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync:rebrickable:categories": "node scripts/sync-rebrickable-categories.mjs",
+    "sync:rebrickable:parts": "node scripts/sync-rebrickable-parts.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
+    "dotenv": "^17.3.1",
+    "lottie-react": "^2.4.1",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"

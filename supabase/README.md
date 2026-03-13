@@ -48,6 +48,10 @@
   - Adds global maintenance settings and extends dashboard bootstrap RPC.
 - `supabase/migrations/0023_fix_app_maintenance_rls_insert.sql`
   - Fixes RLS insert policy for app maintenance setup.
+- `supabase/migrations/0024_create_lists_and_list_items.sql`
+  - Creates `lists` and `list_items` tables with RLS policies.
+- `supabase/migrations/0025_create_parts_catalog_and_search_rpc.sql`
+  - Adds local parts catalog, categories, and search RPC for list item picker.
 
 ## How to run in Supabase dashboard
 
@@ -75,6 +79,8 @@
 22. Run `0021_add_lug_logos_storage_bucket.sql`.
 23. Run `0022_add_global_maintenance_and_bootstrap_fields.sql`.
 24. Run `0023_fix_app_maintenance_rls_insert.sql`.
+25. Run `0024_create_lists_and_list_items.sql`.
+26. Run `0025_create_parts_catalog_and_search_rpc.sql`.
 
 ## Notes
 

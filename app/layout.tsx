@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Chewy, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -11,6 +11,12 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const chewy = Chewy({
+  variable: "--font-chewy",
+  subsets: ["latin"],
+  weight: "400",
 });
 
 const cubano = localFont({
@@ -32,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${cubano.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${chewy.variable} ${cubano.variable} antialiased`}
       >
         {children}
       </body>

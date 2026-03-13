@@ -25,6 +25,10 @@ h6 {
   font-family: var(--font-cubano), var(--font-geist-sans), sans-serif;
 }
 
+.font-boogaloo {
+  font-family: var(--font-chewy), var(--font-geist-sans), sans-serif !important;
+}
+
 body {
   background: var(--background);
   color: #000;

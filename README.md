@@ -2,6 +2,46 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+## Environment Variables
+
+Create a local env file from the example:
+
+```bash
+cp .env.example .env.local
+```
+
+Required values:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (solo scripts/server, nunca en frontend)
+- `REBRICKABLE_API_KEY` (server-side only, never expose as `NEXT_PUBLIC_*`)
+- `REBRICKABLE_API_BASE_URL` (default: `https://rebrickable.com/api/v3`)
+
+## Sync Rebrickable categories
+
+After running Supabase migration `0025_create_parts_catalog_and_search_rpc.sql`, sync categories with:
+
+```bash
+npm run sync:rebrickable:categories
+```
+
+## Sync Rebrickable parts (batch)
+
+Run a resumable batch sync into `parts_catalog`:
+
+```bash
+npm run sync:rebrickable:parts
+```
+
+If it stops, run it again and it resumes automatically.
+
+To restart from scratch:
+
+```bash
+npm run sync:rebrickable:parts -- --reset
+```
+
 First, run the development server:
 
 ```bash

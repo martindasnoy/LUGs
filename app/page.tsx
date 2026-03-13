@@ -2,8 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import Lottie from "lottie-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { type UiLanguage, uiLanguageLabels, uiLanguages, uiTranslations } from "@/lib/i18n/ui";
+import legoSpinnerAnimation from "@/Imagenes/Lego Spinner.json";
 
 type Mode = "login" | "register";
 type SocialPlatform = "instagram" | "facebook" | "";
@@ -62,6 +64,44 @@ type PendingLugAccessAction = {
   lug_id: string;
   lug_name: string;
 };
+
+type AppSection = "dashboard" | "listas" | "lista_detalle";
+type ListaTipo = "deseos" | "venta";
+type ListaVisibilidad = "privado" | "publico";
+
+type ListaItem = {
+  id: string;
+  nombre: string;
+  tipo: ListaTipo;
+  piezas: number;
+  lotes: number;
+  visibilidad: ListaVisibilidad;
+};
+
+type PartCategoryItem = {
+  id: number;
+  name: string;
+  part_count: number;
+};
+
+type PartCatalogItem = {
+  part_num: string;
+  name: string;
+  part_img_url: string | null;
+  category_id: number | null;
+  is_printed?: boolean;
+};
+
+type ListPartItem = {
+  item_id: string;
+  part_num: string | null;
+  part_name: string | null;
+  color_name: string | null;
+  quantity: number;
+};
+
+type CategoriesPanelMode = "categories" | "parts";
+type CategoryQuickFilter = "all" | "popular" | "minifig" | "technic" | "otros";
 
 type RolLug = "admin" | "common" | null;
 
@@ -203,6 +243,53 @@ export default function Home() {
   const [currentLugColor3, setCurrentLugColor3] = useState("#111111");
   const [currentLugLogoDataUrl, setCurrentLugLogoDataUrl] = useState<string | null>(null);
   const [legacyLogosBackfillRunning, setLegacyLogosBackfillRunning] = useState(false);
+  const [activeSection, setActiveSection] = useState<AppSection>(() => {
+    if (typeof window === "undefined") {
+      return "dashboard";
+    }
+
+    const stored = window.localStorage.getItem("active_section_v1");
+    if (stored === "listas" || stored === "lista_detalle") {
+      return stored;
+    }
+    return "dashboard";
+  });
+  const [showCreateListaPanel, setShowCreateListaPanel] = useState(false);
+  const [newListaTipo, setNewListaTipo] = useState<ListaTipo>("deseos");
+  const [newListaNombre, setNewListaNombre] = useState("");
+  const [listasItems, setListasItems] = useState<ListaItem[]>([]);
+  const [listasLoading, setListasLoading] = useState(false);
+  const [listasSaving, setListasSaving] = useState(false);
+  const [showDeleteListaConfirmPanel, setShowDeleteListaConfirmPanel] = useState(false);
+  const [listaToDelete, setListaToDelete] = useState<ListaItem | null>(null);
+  const [selectedListForItems, setSelectedListForItems] = useState<ListaItem | null>(null);
+  const [listItemsLoading, setListItemsLoading] = useState(false);
+  const [listItemsRows, setListItemsRows] = useState<ListPartItem[]>([]);
+  const [partsCategories, setPartsCategories] = useState<PartCategoryItem[]>([]);
+  const [partsSearchLoading, setPartsSearchLoading] = useState(false);
+  const [partsSearchQuery, setPartsSearchQuery] = useState("");
+  const [partsSearchCategoryId, setPartsSearchCategoryId] = useState<number | null>(null);
+  const [partsSearchResults, setPartsSearchResults] = useState<PartCatalogItem[]>([]);
+  const [showCategoriesPanel, setShowCategoriesPanel] = useState(false);
+  const [categoriesPanelMode, setCategoriesPanelMode] = useState<CategoriesPanelMode>("categories");
+  const [categoryQuickFilter, setCategoryQuickFilter] = useState<CategoryQuickFilter>("popular");
+  const [selectedPanelCategory, setSelectedPanelCategory] = useState<PartCategoryItem | null>(null);
+  const [panelPartsPage, setPanelPartsPage] = useState(1);
+  const [panelPartsLoading, setPanelPartsLoading] = useState(false);
+  const [panelPartsResults, setPanelPartsResults] = useState<PartCatalogItem[]>([]);
+  const [panelPrintFilters, setPanelPrintFilters] = useState<{ no_printed: boolean; printed: boolean }>({
+    no_printed: true,
+    printed: false,
+  });
+  const [selectedPanelPartNum, setSelectedPanelPartNum] = useState<string | null>(null);
+  const [showRenameListaPanel, setShowRenameListaPanel] = useState(false);
+  const [listaToRename, setListaToRename] = useState<ListaItem | null>(null);
+  const [renameListaInput, setRenameListaInput] = useState("");
+  const [addItemColorMode, setAddItemColorMode] = useState<"bricklink" | "lego">("bricklink");
+  const [addItemColorNameInput, setAddItemColorNameInput] = useState("");
+  const [addItemQuantity, setAddItemQuantity] = useState(1);
+  const [selectedSearchPartNum, setSelectedSearchPartNum] = useState<string | null>(null);
+  const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({});
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const submitText = mode === "register" ? t.createAccount : t.signIn;
@@ -214,9 +301,93 @@ export default function Home() {
     () => masterLugs.filter((lug) => lug.lug_id !== currentLugId),
     [masterLugs, currentLugId],
   );
+  const listasDeseos = useMemo(() => listasItems.filter((item) => item.tipo === "deseos"), [listasItems]);
+  const listasVenta = useMemo(() => listasItems.filter((item) => item.tipo === "venta"), [listasItems]);
+  const filteredCategories = useMemo(() => {
+    const getGroup = (name: string): CategoryQuickFilter => {
+      const normalized = name.toLowerCase();
+      if (normalized.includes("minifig") || normalized.includes("minidoll")) {
+        return "minifig";
+      }
+      if (normalized.includes("technic")) {
+        return "technic";
+      }
+      if (
+        normalized.includes("brick") ||
+        normalized.includes("plate") ||
+        normalized.includes("tile") ||
+        normalized.includes("slope") ||
+        normalized.includes("modified") ||
+        normalized.includes("wedge") ||
+        normalized.includes("arch") ||
+        normalized.includes("panel") ||
+        normalized.includes("round")
+      ) {
+        return "popular";
+      }
+      return "otros";
+    };
+
+    if (categoryQuickFilter === "all") {
+      return partsCategories;
+    }
+
+    return partsCategories.filter((category) => getGroup(category.name) === categoryQuickFilter);
+  }, [partsCategories, categoryQuickFilter]);
   const uiColor1 = currentLugColor1 || "#006eb2";
   const uiColor3 = currentLugColor3 || "#111111";
   const uiColor1Text = getContrastTextColor(uiColor1);
+  const panelFilteredParts = useMemo(() => {
+    const looksPrinted = (part: PartCatalogItem) => {
+      if (typeof part.is_printed === "boolean") {
+        return part.is_printed;
+      }
+      const code = part.part_num.toLowerCase();
+      const title = part.name.toLowerCase();
+      return /pb|pr|pat/.test(code) || title.includes("pattern") || title.includes("printed");
+    };
+
+    return panelPartsResults.filter((part) => {
+      const isPrintedPart = looksPrinted(part);
+      if (isPrintedPart && panelPrintFilters.printed) {
+        return true;
+      }
+      if (!isPrintedPart && panelPrintFilters.no_printed) {
+        return true;
+      }
+      return false;
+    });
+  }, [panelPartsResults, panelPrintFilters]);
+  const panelPartsMaxPage = useMemo(() => Math.max(1, Math.ceil(panelFilteredParts.length / 20)), [panelFilteredParts.length]);
+  const panelCurrentPage = useMemo(() => Math.min(panelPartsPage, panelPartsMaxPage), [panelPartsPage, panelPartsMaxPage]);
+  const panelVisibleParts = useMemo(() => {
+    const from = Math.max(0, (panelCurrentPage - 1) * 20);
+    return panelFilteredParts.slice(from, from + 20);
+  }, [panelFilteredParts, panelCurrentPage]);
+  const selectedSearchPart = useMemo(
+    () => partsSearchResults.find((part) => part.part_num === selectedSearchPartNum) ?? null,
+    [partsSearchResults, selectedSearchPartNum],
+  );
+  const showLoaderPopup =
+    loading ||
+    settingsSaving ||
+    creatingLug ||
+    settingsLugPanelLoading ||
+    settingsLugSaving ||
+    lugInfoLoading ||
+    masterLugsLoading ||
+    requestActionLoadingLugId !== null ||
+    joinRequestSending ||
+    adminRequestsLoading ||
+    adminDecisionLoading ||
+    promoteMemberLoadingId !== null ||
+    masterEmptyLugsLoading ||
+    masterLugActionLoadingId !== null ||
+    legacyLogosBackfillRunning ||
+    listasLoading ||
+    listasSaving ||
+    listItemsLoading ||
+    partsSearchLoading;
 
   function getFaceImagePath(faceNum: number) {
     return `/api/avatar/Cabeza_${String(faceNum).padStart(2, "0")}.png`;
@@ -232,6 +403,62 @@ export default function Home() {
     const normalized = String(value ?? "").trim();
     return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(normalized) ? normalized : fallback;
   }
+
+  function isTargetRedColor(value: unknown) {
+    if (!Array.isArray(value) || value.length < 3) {
+      return false;
+    }
+
+    const [r, g, b] = value;
+    if (typeof r !== "number" || typeof g !== "number" || typeof b !== "number") {
+      return false;
+    }
+
+    return r > 0.75 && g < 0.3 && b < 0.3;
+  }
+
+  const loaderAnimationData = useMemo(() => {
+    const toUnitRgb = (hexColor: string) => {
+      const normalized = toColorPickerValue(hexColor, "#006eb2");
+      const hex =
+        normalized.length === 4
+          ? `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`
+          : normalized;
+
+      const r = Number.parseInt(hex.slice(1, 3), 16) / 255;
+      const g = Number.parseInt(hex.slice(3, 5), 16) / 255;
+      const b = Number.parseInt(hex.slice(5, 7), 16) / 255;
+
+      return [r, g, b, 1] as [number, number, number, number];
+    };
+
+    const clone = JSON.parse(JSON.stringify(legoSpinnerAnimation)) as Record<string, unknown>;
+    const nextColor = toUnitRgb(uiColor1);
+
+    const walk = (node: unknown) => {
+      if (Array.isArray(node)) {
+        node.forEach((item) => walk(item));
+        return;
+      }
+
+      if (!node || typeof node !== "object") {
+        return;
+      }
+
+      const record = node as Record<string, unknown>;
+      if (record.c && typeof record.c === "object") {
+        const colorRecord = record.c as Record<string, unknown>;
+        if (isTargetRedColor(colorRecord.k)) {
+          colorRecord.k = [...nextColor];
+        }
+      }
+
+      Object.values(record).forEach((value) => walk(value));
+    };
+
+    walk(clone);
+    return clone;
+  }, [uiColor1]);
 
   function getContrastTextColor(backgroundColor: string | null | undefined) {
     const normalized = String(backgroundColor ?? "").trim();
@@ -360,6 +587,485 @@ export default function Home() {
 
     setMaintenanceEnabled(false);
     setStatus("Mantenimiento desactivado.");
+  }
+
+  const loadListasFromDb = useCallback(async () => {
+    if (!supabase || !userId) {
+      setListasItems([]);
+      return;
+    }
+
+    setListasLoading(true);
+
+    const { data, error } = await supabase
+      .from("lists")
+      .select("list_id, name, list_type, is_public, list_items(quantity)")
+      .eq("owner_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const parsed = rows.map((row) => {
+      const items = Array.isArray(row.list_items) ? (row.list_items as Array<Record<string, unknown>>) : [];
+      const lotes = items.length;
+      const piezas = items.reduce((acc, item) => acc + Number(item.quantity ?? 0), 0);
+
+      return {
+        id: String(row.list_id ?? ""),
+        nombre: String(row.name ?? ""),
+        tipo: String(row.list_type ?? "deseos") === "venta" ? "venta" : "deseos",
+        piezas,
+        lotes,
+        visibilidad: Boolean(row.is_public) ? "publico" : "privado",
+      } as ListaItem;
+    });
+
+    setListasItems(parsed);
+    setListasLoading(false);
+  }, [supabase, t.errorPrefix, userId]);
+
+  async function createListaItem() {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    const nombre = newListaNombre.trim();
+    if (!nombre) {
+      setStatus("El nombre de la lista es obligatorio.");
+      return;
+    }
+
+    setListasSaving(true);
+
+    const { error } = await supabase.from("lists").insert({
+      owner_id: userId,
+      lug_id: currentLugId,
+      name: nombre,
+      list_type: newListaTipo,
+      is_public: false,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    await loadListasFromDb();
+    setShowCreateListaPanel(false);
+    setNewListaNombre("");
+    setNewListaTipo("deseos");
+    setListasSaving(false);
+  }
+
+  async function setListaVisibilidad(listaId: string, visibilidad: ListaVisibilidad) {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setListasSaving(true);
+
+    const { error } = await supabase
+      .from("lists")
+      .update({ is_public: visibilidad === "publico" })
+      .eq("list_id", listaId)
+      .eq("owner_id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    setListasItems((prev) => prev.map((item) => (item.id === listaId ? { ...item, visibilidad } : item)));
+    setListasSaving(false);
+  }
+
+  function openDeleteListaConfirm(item: ListaItem) {
+    setListaToDelete(item);
+    setShowDeleteListaConfirmPanel(true);
+  }
+
+  async function deleteListaConfirmed() {
+    if (!supabase || !userId || !listaToDelete) {
+      return;
+    }
+
+    setListasSaving(true);
+
+    const { error } = await supabase
+      .from("lists")
+      .delete()
+      .eq("list_id", listaToDelete.id)
+      .eq("owner_id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    setListasItems((prev) => prev.filter((item) => item.id !== listaToDelete.id));
+    setShowDeleteListaConfirmPanel(false);
+    setListaToDelete(null);
+    setListasSaving(false);
+  }
+
+  const loadPartsCategories = useCallback(async () => {
+    if (!supabase) {
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("part_categories")
+      .select("id, name, part_count")
+      .order("name", { ascending: true });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    setPartsCategories(
+      rows.map((row) => ({
+        id: Number(row.id ?? 0),
+        name: String(row.name ?? ""),
+        part_count: Number(row.part_count ?? 0),
+      })),
+    );
+  }, [supabase, t.errorPrefix]);
+
+  const openListasSection = useCallback(async () => {
+    setActiveSection("listas");
+    await Promise.all([loadListasFromDb(), loadPartsCategories()]);
+  }, [loadListasFromDb, loadPartsCategories]);
+
+  const loadListItems = useCallback(
+    async (listId: string) => {
+      if (!supabase || !userId) {
+        return;
+      }
+
+      setListItemsLoading(true);
+
+      const { data, error } = await supabase
+        .from("list_items")
+        .select("item_id, part_num, part_name, color_name, quantity")
+        .eq("list_id", listId)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        setListItemsLoading(false);
+        return;
+      }
+
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      const parsedRows = rows.map((row) => ({
+        item_id: String(row.item_id ?? ""),
+        part_num: row.part_num ? String(row.part_num) : null,
+        part_name: row.part_name ? String(row.part_name) : null,
+        color_name: row.color_name ? String(row.color_name) : null,
+        quantity: Number(row.quantity ?? 1),
+      }));
+
+      setListItemsRows(parsedRows);
+      setItemQuantityInputs(
+        parsedRows.reduce(
+          (acc: Record<string, string>, item) => {
+            acc[item.item_id] = String(Math.max(1, Number(item.quantity) || 1));
+            return acc;
+          },
+          {},
+        ),
+      );
+      setListItemsLoading(false);
+    },
+    [supabase, t.errorPrefix, userId],
+  );
+
+  async function openListDetailPage(lista: ListaItem) {
+    setSelectedListForItems(lista);
+    setActiveSection("lista_detalle");
+    setPartsSearchQuery("");
+    setPartsSearchCategoryId(null);
+    setShowCategoriesPanel(false);
+    setCategoriesPanelMode("categories");
+    setSelectedPanelCategory(null);
+    setPanelPartsPage(1);
+    setPanelPartsResults([]);
+    setPanelPrintFilters({ no_printed: true, printed: false });
+    setSelectedPanelPartNum(null);
+    setSelectedSearchPartNum(null);
+    setPartsSearchResults([]);
+    setPartsSearchQuery("");
+    setAddItemColorNameInput("");
+    setAddItemColorMode("bricklink");
+    setAddItemQuantity(1);
+    if (partsCategories.length === 0) {
+      await loadPartsCategories();
+    }
+    await loadListItems(lista.id);
+  }
+
+  function openRenameListaPanel(item: ListaItem) {
+    setListaToRename(item);
+    setRenameListaInput(item.nombre);
+    setShowRenameListaPanel(true);
+  }
+
+  async function saveRenameLista() {
+    if (!supabase || !userId || !listaToRename) {
+      return;
+    }
+
+    const nextName = renameListaInput.trim();
+    if (!nextName) {
+      setStatus("El nombre de la lista es obligatorio.");
+      return;
+    }
+
+    setListasSaving(true);
+
+    const { error } = await supabase
+      .from("lists")
+      .update({ name: nextName })
+      .eq("list_id", listaToRename.id)
+      .eq("owner_id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    setListasItems((prev) => prev.map((item) => (item.id === listaToRename.id ? { ...item, nombre: nextName } : item)));
+    setSelectedListForItems((prev) => (prev && prev.id === listaToRename.id ? { ...prev, nombre: nextName } : prev));
+    setShowRenameListaPanel(false);
+    setListaToRename(null);
+    setRenameListaInput("");
+    setListasSaving(false);
+  }
+
+  async function searchPartsCatalog() {
+    if (!supabase) {
+      return;
+    }
+
+    setPartsSearchLoading(true);
+
+    const { data, error } = await supabase.rpc("search_parts_catalog", {
+      p_query: partsSearchQuery.trim() || null,
+      p_category_id: partsSearchCategoryId,
+      p_limit: 30,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setPartsSearchLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    setPartsSearchResults(
+      rows.map((row) => ({
+        part_num: String(row.part_num ?? ""),
+        name: String(row.name ?? ""),
+        part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+        category_id: row.category_id ? Number(row.category_id) : null,
+      })),
+    );
+
+    const firstPartNum = rows[0]?.part_num ? String(rows[0].part_num) : null;
+    setSelectedSearchPartNum(firstPartNum);
+
+    setPartsSearchLoading(false);
+  }
+
+  async function loadPanelCategoryParts(category: PartCategoryItem, query = "") {
+    setPanelPartsLoading(true);
+    setSelectedPanelPartNum(null);
+
+    const queryText = query.trim();
+    const pageSize = 100;
+    const maxFetchPages = 60;
+    const allResults: PartCatalogItem[] = [];
+    let totalCount = 0;
+
+    for (let page = 1; page <= maxFetchPages; page += 1) {
+      const params = new URLSearchParams({
+        category_id: String(category.id),
+        page: String(page),
+        page_size: String(pageSize),
+      });
+
+      if (queryText) {
+        params.set("q", queryText);
+      }
+
+      const response = await fetch(`/api/rebrickable/parts?${params.toString()}`);
+      const json = (await response.json()) as {
+        error?: string;
+        count?: number;
+        results?: PartCatalogItem[];
+      };
+
+      if (!response.ok) {
+        setStatus(json.error || "No pudimos cargar piezas de Rebrickable.");
+        setPanelPartsLoading(false);
+        return;
+      }
+
+      const chunk = Array.isArray(json.results) ? json.results : [];
+      allResults.push(...chunk);
+      totalCount = Number(json.count ?? allResults.length);
+
+      if (chunk.length === 0 || allResults.length >= totalCount) {
+        break;
+      }
+    }
+
+    setPanelPartsResults(allResults);
+    setPanelPartsPage(1);
+    setPanelPartsLoading(false);
+  }
+
+  async function addPartToList(
+    part: PartCatalogItem,
+    options?: {
+      colorName?: string | null;
+      quantity?: number;
+      colorMode?: "bricklink" | "lego";
+    },
+  ) {
+    if (!supabase || !selectedListForItems || !userId) {
+      return;
+    }
+
+    const quantity = Math.max(1, Number(options?.quantity ?? 1));
+    const cleanColor = String(options?.colorName ?? "").trim();
+    const colorMode = options?.colorMode ?? "bricklink";
+    const colorName = cleanColor ? `${colorMode === "lego" ? "LEGO" : "BrickLink"}: ${cleanColor}` : null;
+
+    setListasSaving(true);
+
+    const { error } = await supabase.from("list_items").insert({
+      list_id: selectedListForItems.id,
+      part_num: part.part_num,
+      part_name: part.name,
+      color_name: colorName,
+      quantity,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    await loadListItems(selectedListForItems.id);
+    await loadListasFromDb();
+    setSelectedSearchPartNum(part.part_num);
+    setStatus(`Item agregado: ${part.part_num}`);
+    setListasSaving(false);
+  }
+
+  async function addSelectedPartToList() {
+    if (!selectedSearchPart) {
+      setStatus("Seleccioná una pieza primero.");
+      return;
+    }
+
+    if (!addItemColorNameInput.trim()) {
+      setStatus("Completá el color antes de agregar el item.");
+      return;
+    }
+
+    await addPartToList(selectedSearchPart, {
+      colorName: addItemColorNameInput,
+      quantity: addItemQuantity,
+      colorMode: addItemColorMode,
+    });
+
+    setPartsSearchQuery("");
+    setPartsSearchResults([]);
+    setSelectedSearchPartNum(null);
+    setAddItemColorNameInput("");
+    setAddItemQuantity(1);
+  }
+
+  function selectPartForAddItem(part: PartCatalogItem) {
+    setPartsSearchResults([part]);
+    setSelectedSearchPartNum(part.part_num);
+    setPartsSearchQuery(`${part.part_num} - ${part.name}`);
+    setShowCategoriesPanel(false);
+    setCategoriesPanelMode("categories");
+    setSelectedPanelCategory(null);
+  }
+
+  async function deleteListItem(itemId: string) {
+    if (!supabase || !selectedListForItems) {
+      return;
+    }
+
+    setListasSaving(true);
+
+    const { error } = await supabase.from("list_items").delete().eq("item_id", itemId).eq("list_id", selectedListForItems.id);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    await loadListItems(selectedListForItems.id);
+    await loadListasFromDb();
+    setStatus("Item eliminado.");
+    setListasSaving(false);
+  }
+
+  async function saveListItemQuantity(itemId: string) {
+    if (!supabase || !selectedListForItems) {
+      return;
+    }
+
+    const raw = String(itemQuantityInputs[itemId] ?? "").trim();
+    const quantity = Math.max(1, Number.parseInt(raw || "1", 10) || 1);
+
+    setListasSaving(true);
+
+    const { error } = await supabase
+      .from("list_items")
+      .update({ quantity })
+      .eq("item_id", itemId)
+      .eq("list_id", selectedListForItems.id);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    setItemQuantityInputs((prev) => ({ ...prev, [itemId]: String(quantity) }));
+    await loadListItems(selectedListForItems.id);
+    await loadListasFromDb();
+    setListasSaving(false);
+  }
+
+  function togglePanelPrintFilter(key: "no_printed" | "printed") {
+    setPanelPrintFilters((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      if (!next.no_printed && !next.printed) {
+        return prev;
+      }
+      return next;
+    });
   }
 
   const loadCurrentLugPalette = useCallback(async (lugId: string | null) => {
@@ -673,9 +1379,14 @@ export default function Home() {
       if (user?.id) {
         await loadUserState(user.id, user.email ?? null);
         await loadMaintenanceSettings();
+        if (activeSection === "listas") {
+          await openListasSection();
+        }
       } else {
         setUserId(null);
         setUserEmail(null);
+        setActiveSection("dashboard");
+        setListasItems([]);
         setIsMaster(false);
         setCurrentLugId(null);
         setRolLug(null);
@@ -702,6 +1413,8 @@ export default function Home() {
         setMaintenanceEnabled(false);
         setMaintenanceMessageLine1("Estamos en mantenimiento");
         setMaintenanceMessageLine2("Volvé en un rato");
+        setSelectedListForItems(null);
+        setListItemsRows([]);
       }
 
       setAppBootLoading(false);
@@ -717,9 +1430,14 @@ export default function Home() {
         if (session?.user?.id) {
           await loadUserState(session.user.id, session.user.email ?? null);
           await loadMaintenanceSettings();
+          if (activeSection === "listas") {
+            await openListasSection();
+          }
         } else {
           setUserId(null);
           setUserEmail(null);
+          setActiveSection("dashboard");
+          setListasItems([]);
           setDisplayName("Usuario");
           setIsMaster(false);
           setCurrentLugId(null);
@@ -747,13 +1465,15 @@ export default function Home() {
           setMaintenanceEnabled(false);
           setMaintenanceMessageLine1("Estamos en mantenimiento");
           setMaintenanceMessageLine2("Volvé en un rato");
+          setSelectedListForItems(null);
+          setListItemsRows([]);
         }
         setAppBootLoading(false);
       })();
     });
 
     return () => subscription.unsubscribe();
-  }, [loadMaintenanceSettings, loadUserState, startBootLoading, supabase]);
+  }, [activeSection, loadMaintenanceSettings, loadUserState, openListasSection, startBootLoading, supabase]);
 
   useEffect(() => {
     if (!userId || !isMaster) {
@@ -882,6 +1602,14 @@ export default function Home() {
 
     return () => window.clearInterval(intervalId);
   }, [loadMaintenanceSettings, userId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem("active_section_v1", activeSection === "lista_detalle" ? "listas" : activeSection);
+  }, [activeSection]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1775,6 +2503,758 @@ export default function Home() {
   }
 
   if (userEmail) {
+    if (activeSection === "lista_detalle" && selectedListForItems) {
+      const listTypeLabel = selectedListForItems.tipo === "deseos" ? "deseos" : "venta";
+      const visibilityLabel = selectedListForItems.visibilidad === "publico" ? "Publica" : "Privada";
+      const totalLotes = listItemsRows.length;
+      const totalPiezas = listItemsRows.reduce((acc, row) => acc + Math.max(0, Number(row.quantity) || 0), 0);
+
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="mx-auto w-full max-w-[900px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{`Lista de ${listTypeLabel} ${selectedListForItems.nombre}`}</h2>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("listas")}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    Volver
+                  </button>
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-700">{visibilityLabel}</p>
+                <p className="mt-1 text-sm text-slate-600">{`Cantidad de lotes: ${totalLotes} - Cantidad de piezas: ${totalPiezas}`}</p>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+              </header>
+
+              <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-3 sm:p-4">
+                <p className="font-boogaloo text-base font-semibold text-slate-900">Agregar item</p>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[170px_minmax(0,1fr)]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCategoriesPanelMode("categories");
+                      setCategoryQuickFilter("popular");
+                      setSelectedPanelCategory(null);
+                      setShowCategoriesPanel(true);
+                    }}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+                  >
+                    Categorias
+                  </button>
+                  <input
+                    type="text"
+                    value={partsSearchQuery}
+                    onChange={(event) => setPartsSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void searchPartsCatalog();
+                      }
+                    }}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Buscar por nombre o part_num"
+                  />
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px_200px_auto]">
+                  <input
+                    type="text"
+                    value={addItemColorNameInput}
+                    onChange={(event) => setAddItemColorNameInput(event.target.value)}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Color"
+                  />
+
+                  <div className="flex items-center overflow-hidden rounded-md border border-slate-300 bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setAddItemQuantity((prev) => Math.max(1, prev - 1))}
+                      className="h-full px-3 text-base font-semibold text-slate-700"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={addItemQuantity}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        setAddItemQuantity(Number.isFinite(next) && next > 0 ? Math.floor(next) : 1);
+                      }}
+                      className="w-full border-x border-slate-300 px-2 py-2 text-center text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setAddItemQuantity((prev) => prev + 1)}
+                      className="h-full px-3 text-base font-semibold text-slate-700"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 overflow-hidden rounded-md border border-slate-300 bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setAddItemColorMode("bricklink")}
+                      className={`px-3 py-2 text-xs font-semibold ${
+                        addItemColorMode === "bricklink" ? "bg-slate-900 text-white" : "text-slate-700"
+                      }`}
+                    >
+                      BrickLink
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAddItemColorMode("lego")}
+                      className={`border-l border-slate-300 px-3 py-2 text-xs font-semibold ${
+                        addItemColorMode === "lego" ? "bg-slate-900 text-white" : "text-slate-700"
+                      }`}
+                    >
+                      LEGO
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => void addSelectedPartToList()}
+                    disabled={!selectedSearchPart || !addItemColorNameInput.trim()}
+                    className="rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60"
+                    style={{ backgroundColor: uiColor1, color: uiColor1Text }}
+                  >
+                    Agregar item
+                  </button>
+                </div>
+
+              </section>
+
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => setStatus("Exportar en preparación.")}
+                  className="w-full rounded-md px-4 py-2 text-sm font-semibold"
+                  style={{ backgroundColor: uiColor1, color: uiColor1Text }}
+                >
+                  Exportar
+                </button>
+              </div>
+
+              <div className="mt-3">
+                <div className="rounded-md border border-slate-200 p-2">
+                  <p className="font-boogaloo text-xs font-semibold uppercase tracking-wide text-slate-500">Ítems de la lista</p>
+                  <div className="mt-2 max-h-[340px] overflow-auto space-y-2">
+                    {listItemsRows.length === 0 ? (
+                      <p className="text-sm text-slate-500">Esta lista todavía no tiene piezas.</p>
+                    ) : (
+                      listItemsRows.map((row) => (
+                        <div key={row.item_id} className="rounded-md border border-slate-200 px-2 py-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-900">{row.part_num || "-"}</p>
+                              <p className="text-xs text-slate-600">{row.part_name || "Sin nombre"}</p>
+                              <p className="text-[11px] text-slate-500">{row.color_name || "Sin color"}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void deleteListItem(row.item_id)}
+                              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
+                              title="Eliminar lote"
+                            >
+                              🗑
+                            </button>
+                          </div>
+
+                          <div className="mt-2 flex items-center gap-2">
+                            <span className="text-[11px] text-slate-500">Cantidad</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={itemQuantityInputs[row.item_id] ?? String(row.quantity)}
+                              onChange={(event) => {
+                                const raw = event.target.value;
+                                setItemQuantityInputs((prev) => ({ ...prev, [row.item_id]: raw }));
+                              }}
+                              onBlur={() => void saveListItemQuantity(row.item_id)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  void saveListItemQuantity(row.item_id);
+                                }
+                              }}
+                              className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                            />
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {showCategoriesPanel ? (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 p-4"
+                onClick={() => {
+                  setShowCategoriesPanel(false);
+                  setCategoriesPanelMode("categories");
+                  setCategoryQuickFilter("popular");
+                  setSelectedPanelCategory(null);
+                }}
+            >
+              <div className="w-full max-w-[700px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                {categoriesPanelMode === "parts" && selectedPanelCategory ? (
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCategoriesPanelMode("categories");
+                            setSelectedPanelCategory(null);
+                          }}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-700"
+                          title="Volver a categorías"
+                        >
+                          ←
+                        </button>
+                        <p className="font-boogaloo text-2xl text-slate-900">{selectedPanelCategory.name}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => togglePanelPrintFilter("no_printed")}
+                          className={`rounded-md border px-3 py-1 text-sm font-semibold ${
+                            panelPrintFilters.no_printed ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                          }`}
+                        >
+                          No impresas
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => togglePanelPrintFilter("printed")}
+                          className={`rounded-md border px-3 py-1 text-sm font-semibold ${
+                            panelPrintFilters.printed ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                          }`}
+                        >
+                          Impresas
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (panelCurrentPage > 1) {
+                            setPanelPartsPage(panelCurrentPage - 1);
+                          }
+                        }}
+                        disabled={panelCurrentPage <= 1}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                      >
+                        ←
+                      </button>
+                      <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${panelCurrentPage} / ${panelPartsMaxPage}`}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const maxPage = panelPartsMaxPage;
+                          if (panelCurrentPage < maxPage) {
+                            setPanelPartsPage(panelCurrentPage + 1);
+                          }
+                        }}
+                        disabled={panelCurrentPage >= panelPartsMaxPage}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                      >
+                        →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCategoriesPanel(false);
+                          setCategoriesPanelMode("categories");
+                          setCategoryQuickFilter("popular");
+                          setSelectedPanelCategory(null);
+                        }}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-boogaloo text-2xl text-slate-900">Catalogo</p>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryQuickFilter("all")}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                          categoryQuickFilter === "all" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryQuickFilter("popular")}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                          categoryQuickFilter === "popular" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        Popular
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryQuickFilter("minifig")}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                          categoryQuickFilter === "minifig" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        Minifig
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryQuickFilter("technic")}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                          categoryQuickFilter === "technic" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        Technic
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryQuickFilter("otros")}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                          categoryQuickFilter === "otros" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        Otros
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCategoriesPanel(false);
+                        setCategoriesPanelMode("categories");
+                        setCategoryQuickFilter("popular");
+                        setSelectedPanelCategory(null);
+                      }}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                )}
+
+                {categoriesPanelMode === "parts" && selectedPanelCategory ? (
+                  <>
+                    <div className="mt-3 rounded-md border border-slate-300 p-2">
+                      {panelPartsLoading ? (
+                        <p className="px-2 py-3 text-sm text-slate-500">Cargando piezas...</p>
+                      ) : panelFilteredParts.length === 0 ? (
+                        <p className="px-2 py-3 text-sm text-slate-500">Sin piezas para mostrar.</p>
+                      ) : (
+                        <div className="grid grid-cols-5 gap-2">
+                          {panelVisibleParts.map((part) => (
+                            <div
+                              key={part.part_num}
+                              onDoubleClick={() => selectPartForAddItem(part)}
+                              onClick={() => setSelectedPanelPartNum(part.part_num)}
+                              className={`cursor-pointer rounded-md border p-2 hover:bg-slate-50 ${
+                                selectedPanelPartNum === part.part_num ? "border-slate-900 bg-slate-50" : "border-slate-200"
+                              }`}
+                              title="Doble clic para agregar"
+                            >
+                              <div className="mx-auto h-16 w-16 overflow-hidden rounded border border-slate-200 bg-slate-50">
+                                {part.part_img_url ? (
+                                  <Image
+                                    src={part.part_img_url}
+                                    alt={part.name}
+                                    width={64}
+                                    height={64}
+                                    unoptimized
+                                    className="h-full w-full object-contain"
+                                  />
+                                ) : null}
+                              </div>
+                              <p className="mt-2 truncate text-[11px] font-semibold text-slate-900">{part.part_num}</p>
+                              <p className="truncate text-[11px] text-slate-600">{part.name}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="mt-3 flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const selected = panelVisibleParts.find((part) => part.part_num === selectedPanelPartNum);
+                            if (selected) {
+                              selectPartForAddItem(selected);
+                            }
+                          }}
+                          disabled={!selectedPanelPartNum}
+                          className="rounded-md px-6 py-2 text-lg font-semibold disabled:opacity-60"
+                          style={{ backgroundColor: uiColor1, color: uiColor1Text }}
+                        >
+                          Agregar
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-3 max-h-[520px] overflow-auto rounded-md border border-slate-300 p-2">
+                    {filteredCategories.length === 0 ? (
+                      <p className="px-2 py-2 text-sm text-slate-500">No hay categorias para mostrar. Primero hay que sincronizar el catalogo.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {filteredCategories.map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => {
+                              setPartsSearchCategoryId(cat.id);
+                              setSelectedPanelCategory(cat);
+                              setCategoriesPanelMode("parts");
+                              setPanelPartsPage(1);
+                              void loadPanelCategoryParts(cat, partsSearchQuery);
+                            }}
+                            className="w-full rounded-md border border-slate-200 px-3 py-2 text-left text-slate-800 hover:bg-slate-50"
+                          >
+                            <span className="text-base">{cat.name}</span>
+                            <span className="ml-2 text-sm text-slate-500">({cat.part_count} parts)</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {showLoaderPopup ? (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4">
+              <div className="w-[140px] rounded-xl border p-2 shadow-xl" style={{ backgroundColor: uiColor1, borderColor: uiColor3 }}>
+                <div className="rounded-lg bg-white p-1">
+                  <Lottie animationData={loaderAnimationData} loop autoplay className="h-20 w-full" />
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </main>
+      );
+    }
+
+    if (activeSection === "listas") {
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">Listas</h2>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("dashboard")}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    Volver
+                  </button>
+                </div>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+              </header>
+
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateListaPanel(true)}
+                  className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 text-2xl font-semibold leading-none text-slate-700"
+                >
+                  +
+                </button>
+                <p className="text-sm font-semibold text-slate-800">Crear lista</p>
+              </div>
+
+              <div className="mt-4 space-y-5">
+                <section>
+                  <h3 className="font-boogaloo text-sm font-semibold text-slate-700">Tus listas de deseos creadas</h3>
+                  <div className="mt-2 space-y-2">
+                    {listasDeseos.length === 0 ? (
+                      <p className="text-sm text-slate-500">Sin listas de deseos.</p>
+                    ) : (
+                      listasDeseos.map((item) => (
+                        <div
+                          key={item.id}
+                          onDoubleClick={() => void openListDetailPage(item)}
+                          className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 px-3 py-2"
+                        >
+                          <Image
+                            src="/api/avatar/pieza_silueta.png"
+                            alt="Pieza"
+                            width={52}
+                            height={52}
+                            unoptimized
+                            className="h-12 w-12 object-contain"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1">
+                              <p className="truncate text-sm font-semibold text-slate-900">{item.nombre}</p>
+                              <button
+                                type="button"
+                                onClick={() => openRenameListaPanel(item)}
+                                className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700"
+                                title="Renombrar lista"
+                              >
+                                ✎
+                              </button>
+                            </div>
+                            <p className="text-xs text-slate-600">{`Lotes: ${item.lotes} - Piezas: ${item.piezas}`}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => void setListaVisibilidad(item.id, "privado")}
+                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                  item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                                }`}
+                              >
+                                Privado
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void setListaVisibilidad(item.id, "publico")}
+                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                  item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                                }`}
+                              >
+                                Público
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openDeleteListaConfirm(item)}
+                              className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
+                            >
+                              Chau lista
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="font-boogaloo text-sm font-semibold text-slate-700">Tus listas de venta creadas</h3>
+                  <div className="mt-2 space-y-2">
+                    {listasVenta.length === 0 ? (
+                      <p className="text-sm text-slate-500">Sin listas de venta.</p>
+                    ) : (
+                      listasVenta.map((item) => (
+                        <div
+                          key={item.id}
+                          onDoubleClick={() => void openListDetailPage(item)}
+                          className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 px-3 py-2"
+                        >
+                          <Image
+                            src="/api/avatar/pieza_silueta.png"
+                            alt="Pieza"
+                            width={52}
+                            height={52}
+                            unoptimized
+                            className="h-12 w-12 object-contain"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1">
+                              <p className="truncate text-sm font-semibold text-slate-900">{item.nombre}</p>
+                              <button
+                                type="button"
+                                onClick={() => openRenameListaPanel(item)}
+                                className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700"
+                                title="Renombrar lista"
+                              >
+                                ✎
+                              </button>
+                            </div>
+                            <p className="text-xs text-slate-600">{`Lotes: ${item.lotes} - Piezas: ${item.piezas}`}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => void setListaVisibilidad(item.id, "privado")}
+                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                  item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                                }`}
+                              >
+                                Privado
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void setListaVisibilidad(item.id, "publico")}
+                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                  item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                                }`}
+                              >
+                                Público
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openDeleteListaConfirm(item)}
+                              className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
+                            >
+                              Chau lista
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          {showCreateListaPanel ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCreateListaPanel(false)}>
+              <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <div className="mb-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewListaTipo("deseos")}
+                    className={`rounded-md border px-3 py-1.5 text-sm font-semibold ${
+                      newListaTipo === "deseos" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                    }`}
+                  >
+                    Lista de deseos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewListaTipo("venta")}
+                    className={`rounded-md border px-3 py-1.5 text-sm font-semibold ${
+                      newListaTipo === "venta" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                    }`}
+                  >
+                    Lista de venta
+                  </button>
+                </div>
+
+                <label className="block text-sm text-slate-700">Nombre</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newListaNombre}
+                    onChange={(event) => setNewListaNombre(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Nombre de la lista"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void createListaItem()}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    Crear lista
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {showRenameListaPanel && listaToRename ? (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4"
+              onClick={() => {
+                setShowRenameListaPanel(false);
+                setListaToRename(null);
+                setRenameListaInput("");
+              }}
+            >
+              <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <h3 className="text-lg font-semibold text-slate-900">Renombrar lista</h3>
+                <label className="mt-3 block text-sm text-slate-700">Nombre</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={renameListaInput}
+                    onChange={(event) => setRenameListaInput(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Nombre de la lista"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveRenameLista()}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {showDeleteListaConfirmPanel && listaToDelete ? (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 p-4"
+              onClick={() => {
+                setShowDeleteListaConfirmPanel(false);
+                setListaToDelete(null);
+              }}
+            >
+              <div className="w-full max-w-[420px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <div className="mb-3 flex justify-center">
+                  <Image
+                    src="/api/avatar/LEGO-ICON_A.svg"
+                    alt="LEGO icon"
+                    width={96}
+                    height={96}
+                    unoptimized
+                    className="h-24 w-24 object-contain"
+                  />
+                </div>
+                <p className="text-center text-sm text-slate-900">
+                  ¿Estas seguro que queres borrar la lista? Se perdera la informacion de todas las piezas que esten dentro.
+                </p>
+                <div className="mt-4 flex justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDeleteListaConfirmPanel(false);
+                      setListaToDelete(null);
+                    }}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    No
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteListaConfirmed()}
+                    className="rounded-md border border-red-300 px-3 py-2 text-sm font-semibold text-red-700"
+                  >
+                    Sí
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {showLoaderPopup ? (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4">
+              <div className="w-[140px] rounded-xl border p-2 shadow-xl" style={{ backgroundColor: uiColor1, borderColor: uiColor3 }}>
+                <div className="rounded-lg bg-white p-1">
+                  <Lottie animationData={loaderAnimationData} loop autoplay className="h-20 w-full" />
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </main>
+      );
+    }
+
     return (
       <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
         <div className="mx-auto w-full max-w-[800px]">
@@ -1793,9 +3273,9 @@ export default function Home() {
 
           <div className="rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
           <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
-          <header className="border-b border-slate-200 pb-5">
+          <header className="pb-5">
             <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
+              <div className="flex items-start gap-3">
                 <Image
                   src={getFaceImagePath(selectedFace)}
                   alt="Avatar"
@@ -1804,78 +3284,83 @@ export default function Home() {
                   unoptimized
                   className="h-20 w-20 object-contain"
                 />
-                <div className="flex items-center gap-2">
-                  <h1 className="font-cubano-title break-all text-3xl font-semibold text-slate-900 sm:text-5xl">{displayName}</h1>
-                  {isMaster && masterEmptyNotificationsCount > 0 ? (
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h1 className="font-boogaloo break-all text-3xl font-semibold text-slate-900 sm:text-5xl">{displayName}</h1>
+                    {isMaster && masterEmptyNotificationsCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void openMasterEmptyLugsPanel()}
+                        className="relative rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700"
+                        title="LUGs vacíos"
+                        aria-label="LUGs vacíos"
+                      >
+                        <span className="text-base">✉</span>
+                        <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
+                          {masterEmptyNotificationsCount}
+                        </span>
+                      </button>
+                    ) : null}
+                    {rolLug === "admin" && adminPendingRequestsCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void openAdminRequestsPanel()}
+                        className="relative rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700"
+                        title="Solicitudes de ingreso"
+                        aria-label="Solicitudes de ingreso"
+                      >
+                        <span className="text-base">✉</span>
+                        <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
+                          {adminPendingRequestsCount}
+                        </span>
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-black">
                     <button
                       type="button"
-                      onClick={() => void openMasterEmptyLugsPanel()}
-                      className="relative rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700"
-                      title="LUGs vacíos"
-                      aria-label="LUGs vacíos"
+                      aria-label={t.settingsAria}
+                      title={t.settingsTitle}
+                      onClick={() => void openUserSettings()}
+                      className="rounded-md border border-black/20 p-2"
                     >
-                      <span className="text-base">✉</span>
-                      <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
-                        {masterEmptyNotificationsCount}
-                      </span>
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 1-2 0 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 1 0-2 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6c.38 0 .75-.14 1-.4a1.7 1.7 0 0 1 2 0c.25.26.62.4 1 .4a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c0 .38.14.75.4 1a1.7 1.7 0 0 1 0 2c-.26.25-.4.62-.4 1Z" />
+                      </svg>
                     </button>
-                  ) : null}
-                  {rolLug === "admin" && adminPendingRequestsCount > 0 ? (
                     <button
                       type="button"
-                      onClick={() => void openAdminRequestsPanel()}
-                      className="relative rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700"
-                      title="Solicitudes de ingreso"
-                      aria-label="Solicitudes de ingreso"
+                      onClick={handleLogout}
+                      disabled={loading}
+                      className="rounded-md border border-black/20 px-3 py-1 text-sm"
                     >
-                      <span className="text-base">✉</span>
-                      <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
-                        {adminPendingRequestsCount}
-                      </span>
+                      {t.logout}
                     </button>
-                  ) : null}
+                  </div>
                 </div>
               </div>
               {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
                 <Image
                   src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
                   alt={currentUserLug?.nombre || "Logo LUG"}
-                  width={126}
-                  height={126}
+                  width={88}
+                  height={88}
                   unoptimized
-                  className="h-[126px] w-[126px] object-contain"
+                  className="h-[88px] w-[88px] object-contain"
                 />
               ) : null}
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-black">
-              <p className="text-base font-medium">{userEmail}</p>
-              <button
-                type="button"
-                aria-label={t.settingsAria}
-                title={t.settingsTitle}
-                onClick={() => void openUserSettings()}
-                className="rounded-md border border-black/20 p-2"
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 1-2 0 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 1 0-2 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6c.38 0 .75-.14 1-.4a1.7 1.7 0 0 1 2 0c.25.26.62.4 1 .4a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c0 .38.14.75.4 1a1.7 1.7 0 0 1 0 2c-.26.25-.4.62-.4 1Z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={handleLogout}
-                disabled={loading}
-                className="rounded-md border border-black/20 px-3 py-1.5 text-sm"
-              >
-                {t.logout}
-              </button>
-            </div>
+            <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
 
             <div className="mt-3 grid w-full grid-cols-4 gap-2">
               <button
                 type="button"
-                onClick={() => setStatus("Listas en preparación.")}
+                onClick={() => {
+                  void openListasSection();
+                }}
                 className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
                 style={{ borderColor: currentLugColor2 || "#ffffff" }}
               >
@@ -1927,7 +3412,7 @@ export default function Home() {
         {showUserSettings ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
             <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
-              <h3 className="text-xl text-slate-900">Configuracion de usuario</h3>
+              <h3 className="font-boogaloo text-xl text-slate-900">Configuracion de usuario</h3>
 
               <div className="mt-4 flex items-start gap-3">
                 <button
@@ -2115,7 +3600,7 @@ export default function Home() {
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">
+                <h3 className="font-boogaloo text-xl text-slate-900">
                   {rolLug === "admin" ? "Propiedades del LUG" : "Informacion del LUG"}
                 </h3>
                 {rolLug === "admin" ? (
@@ -2308,7 +3793,9 @@ export default function Home() {
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowMasterPanel(false)}>
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">Panel Master</h3>
+                <h3 className="text-xl text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                  Panel Master
+                </h3>
                 <button
                   type="button"
                   onClick={() => setShowMasterPanel(false)}
@@ -2320,7 +3807,9 @@ export default function Home() {
 
               <div className="mt-4 rounded-lg border border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-sm font-semibold text-slate-900">LUGs</h4>
+                  <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                    LUGs
+                  </h4>
                   <button
                     type="button"
                     onClick={() => {
@@ -2391,7 +3880,9 @@ export default function Home() {
               </div>
 
               <div className="mt-4 rounded-lg border border-slate-200 p-4">
-                <h4 className="text-sm font-semibold text-slate-900">Mantenimiento</h4>
+                <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                  Mantenimiento
+                </h4>
                 <div className="mt-3 flex flex-wrap items-center justify-start gap-2">
                   <button
                     type="button"
@@ -2532,7 +4023,7 @@ export default function Home() {
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowLugsPanel(false)}>
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">Lista de LUGs</h3>
+                <h3 className="font-boogaloo text-xl text-slate-900">Lista de LUGs</h3>
               </div>
 
               <div className="mt-3 rounded-md border border-slate-200 p-2">
@@ -2932,7 +4423,7 @@ export default function Home() {
             }}
           >
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-xl text-slate-900">Crear LUG</h3>
+              <h3 className="font-boogaloo text-xl text-slate-900">Crear LUG</h3>
 
               <div className="mt-4 space-y-3">
                 <div>
@@ -3138,6 +4629,16 @@ export default function Home() {
         ) : null}
 
         {status ? <p className="mx-auto mt-4 w-full max-w-[800px] rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">{status}</p> : null}
+
+        {showLoaderPopup ? (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4">
+            <div className="w-[140px] rounded-xl border p-2 shadow-xl" style={{ backgroundColor: uiColor1, borderColor: uiColor3 }}>
+              <div className="rounded-lg bg-white p-1">
+                <Lottie animationData={loaderAnimationData} loop autoplay className="h-20 w-full" />
+              </div>
+            </div>
+          </div>
+        ) : null}
         </div>
       </main>
     );
@@ -3229,6 +4730,16 @@ export default function Home() {
         </form>
 
         {status ? <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">{status}</p> : null}
+
+        {showLoaderPopup ? (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4">
+            <div className="w-[140px] rounded-xl border p-2 shadow-xl" style={{ backgroundColor: uiColor1, borderColor: uiColor3 }}>
+              <div className="rounded-lg bg-white p-1">
+                <Lottie animationData={loaderAnimationData} loop autoplay className="h-20 w-full" />
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
   );
