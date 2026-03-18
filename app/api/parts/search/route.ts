@@ -11,14 +11,23 @@ type SearchResultItem = {
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-function getServiceSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+function getServiceSupabase(accessToken?: string | null) {
+  const supabaseKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  if (!SUPABASE_URL || !supabaseKey) {
     return null;
   }
 
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient(SUPABASE_URL, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: accessToken
+      ? {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      : undefined,
   });
 }
 
@@ -126,8 +135,8 @@ function rankAndLimit(rows: SearchResultItem[], query: string, limit: number) {
     .slice(0, limit);
 }
 
-async function searchWithSupabase(query: string, strict: boolean): Promise<SearchResultItem[]> {
-  const supabase = getServiceSupabase();
+async function searchWithSupabase(query: string, strict: boolean, accessToken?: string | null): Promise<SearchResultItem[]> {
+  const supabase = getServiceSupabase(accessToken);
   if (!supabase) {
     return [];
   }
@@ -179,7 +188,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ results: [] });
   }
 
-  const rows = await searchWithSupabase(q, strict);
+  const authHeader = request.headers.get("authorization") || request.headers.get("Authorization");
+  const accessToken = authHeader?.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : null;
+
+  const rows = await searchWithSupabase(q, strict, accessToken);
 
   const deduped = Array.from(new Map(rows.map((row) => [row.part_num, row])).values());
   const ranked = rankAndLimit(deduped, q, limit);

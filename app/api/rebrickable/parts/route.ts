@@ -5,14 +5,23 @@ const API_BASE = process.env.REBRICKABLE_API_BASE_URL || "https://rebrickable.co
 const API_KEY = process.env.REBRICKABLE_API_KEY;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-function getServiceSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+function getServiceSupabase(accessToken?: string | null) {
+  const supabaseKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  if (!SUPABASE_URL || !supabaseKey) {
     return null;
   }
 
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient(SUPABASE_URL, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: accessToken
+      ? {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      : undefined,
   });
 }
 
@@ -21,8 +30,9 @@ async function queryLocalCatalog(
   query: string,
   page: number,
   pageSize: number,
+  accessToken?: string | null,
 ) {
-  const supabase = getServiceSupabase();
+  const supabase = getServiceSupabase(accessToken);
   if (!supabase) {
     return null;
   }
@@ -87,7 +97,10 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get("q") || "";
   const localOnly = searchParams.get("local_only") === "1";
 
-  const localResult = await queryLocalCatalog(categoryId, query, page, pageSize);
+  const authHeader = request.headers.get("authorization") || request.headers.get("Authorization");
+  const accessToken = authHeader?.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : null;
+
+  const localResult = await queryLocalCatalog(categoryId, query, page, pageSize, accessToken);
   if (localOnly) {
     return NextResponse.json({
       count: localResult?.count ?? 0,

@@ -327,6 +327,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [authCooldownUntil, setAuthCooldownUntil] = useState<number>(0);
+  const [authNowMs, setAuthNowMs] = useState<number>(() => Date.now());
   const [appBootLoading, setAppBootLoading] = useState(true);
   const [loadingPhrases, setLoadingPhrases] = useState<string[]>(() => {
     if (typeof window === "undefined") {
@@ -1137,6 +1139,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   }, [language]);
 
   const submitText = mode === "register" ? t.createAccount : t.signIn;
+  const authCooldownRemaining = Math.max(0, Math.ceil((authCooldownUntil - authNowMs) / 1000));
   const buildListStatsLabel = useCallback(
     (lotes: number, piezas: number) => {
       if (language === "en") {
@@ -1554,6 +1557,22 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     };
   }, [addItemColorExists, selectedSearchPart?.part_num, addItemColorMode, addItemColorNameInput]);
 
+  const getSupabaseAuthHeaders = useCallback(async () => {
+    if (!supabase) {
+      return undefined;
+    }
+
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (!accessToken) {
+      return undefined;
+    }
+
+    return {
+      Authorization: `Bearer ${accessToken}`,
+    };
+  }, [supabase]);
+
   useEffect(() => {
     const raw = partsSearchQuery.trim();
     const normalized = raw.startsWith("#") ? raw.slice(1).trim() : raw;
@@ -1578,7 +1597,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       setPartsSearchLoading(true);
       try {
         const params = new URLSearchParams({ q: normalized, limit: "20" });
-        const response = await fetch(`/api/parts/search?${params.toString()}`);
+        const authHeaders = await getSupabaseAuthHeaders();
+        const response = await fetch(`/api/parts/search?${params.toString()}`, {
+          headers: authHeaders,
+        });
         const json = (await response.json()) as { results?: PartCatalogItem[] };
         if (cancelled) {
           return;
@@ -1603,7 +1625,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [partsSearchQuery, selectedSearchPart]);
+  }, [getSupabaseAuthHeaders, partsSearchQuery, selectedSearchPart]);
 
   useEffect(() => {
     const partNum = selectedSearchPart?.part_num;
@@ -3578,7 +3600,10 @@ th{background:#f3f4f6}
         params.set("q", queryText);
       }
 
-      const response = await fetch(`/api/rebrickable/parts?${params.toString()}`);
+      const authHeaders = await getSupabaseAuthHeaders();
+      const response = await fetch(`/api/rebrickable/parts?${params.toString()}`, {
+        headers: authHeaders,
+      });
       const json = (await response.json()) as {
         error?: string;
         count?: number;
@@ -4720,6 +4745,44 @@ th{background:#f3f4f6}
   }, [activeSection]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem("auth_cooldown_until_v1");
+    const parsed = Number(raw ?? 0);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      setAuthCooldownUntil(parsed);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (authCooldownUntil > 0) {
+      window.localStorage.setItem("auth_cooldown_until_v1", String(authCooldownUntil));
+    } else {
+      window.localStorage.removeItem("auth_cooldown_until_v1");
+    }
+  }, [authCooldownUntil]);
+
+  useEffect(() => {
+    if (authCooldownUntil <= Date.now()) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setAuthNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [authCooldownUntil]);
+
+  useEffect(() => {
     if (!initialListId) {
       return;
     }
@@ -4751,9 +4814,47 @@ th{background:#f3f4f6}
     void openListDetailById(initialListId, userId);
   }, [activeSection, initialListId, listasItems, listasLoading, loadListasFromDb, openListDetailById, openListDetailPage, selectedListForItems?.id, userId]);
 
+  function getAuthErrorStatus(message: string) {
+    const normalized = message.trim().toLowerCase();
+
+    if (normalized.includes("email rate limit exceeded")) {
+      return "Demasiados intentos de email. Espera 60 segundos e intentalo de nuevo.";
+    }
+    if (normalized.includes("you can only request this after")) {
+      return "Demasiados intentos seguidos. Espera un momento y vuelve a intentar.";
+    }
+    if (normalized.includes("invalid login credentials")) {
+      return "Email o contrasena incorrectos.";
+    }
+    if (normalized.includes("user already registered")) {
+      return "Ese email ya esta registrado. Usa Iniciar sesion.";
+    }
+
+    return `${t.errorPrefix}: ${message}`;
+  }
+
+  function getAuthRetryDelaySeconds(message: string) {
+    const normalized = message.trim().toLowerCase();
+    const explicitMatch = normalized.match(/after\s+(\d+)\s+seconds?/i);
+    if (explicitMatch) {
+      const seconds = Number(explicitMatch[1] ?? 0);
+      return Number.isFinite(seconds) && seconds > 0 ? seconds : 60;
+    }
+    if (normalized.includes("email rate limit exceeded") || normalized.includes("you can only request this after")) {
+      return 60;
+    }
+    return 0;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setStatus("");
+
+    if (authCooldownRemaining > 0) {
+      setStatus(`Espera ${authCooldownRemaining}s antes de volver a intentar.`);
+      return;
+    }
+
     setLoading(true);
 
     if (!supabase) {
@@ -4764,10 +4865,30 @@ th{background:#f3f4f6}
 
     if (mode === "register") {
       const { error } = await supabase.auth.signUp({ email, password });
-      setStatus(error ? `${t.errorPrefix}: ${error.message}` : t.accountCreated);
+      if (error) {
+        const retrySeconds = getAuthRetryDelaySeconds(error.message);
+        if (retrySeconds > 0) {
+          setAuthCooldownUntil(Date.now() + retrySeconds * 1000);
+          setAuthNowMs(Date.now());
+        }
+        setStatus(getAuthErrorStatus(error.message));
+      } else {
+        setAuthCooldownUntil(0);
+        setStatus(t.accountCreated);
+      }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      setStatus(error ? `${t.errorPrefix}: ${error.message}` : "");
+      if (error) {
+        const retrySeconds = getAuthRetryDelaySeconds(error.message);
+        if (retrySeconds > 0) {
+          setAuthCooldownUntil(Date.now() + retrySeconds * 1000);
+          setAuthNowMs(Date.now());
+        }
+        setStatus(getAuthErrorStatus(error.message));
+      } else {
+        setAuthCooldownUntil(0);
+        setStatus("");
+      }
     }
 
     setLoading(false);
@@ -9590,6 +9711,9 @@ th{background:#f3f4f6}
             {t.login}
           </button>
         </div>
+        <p className="mt-2 text-xs text-slate-600">
+          Tip: usa {t.login} si ya tenes cuenta. {t.register} puede enviar emails y activar limites temporales.
+        </p>
 
         <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
           <div>
@@ -9623,10 +9747,10 @@ th{background:#f3f4f6}
 
           <button
             type="submit"
-            disabled={loading || !supabase}
+            disabled={loading || !supabase || authCooldownRemaining > 0}
             className="w-full rounded-lg bg-black px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
           >
-            {loading ? t.processing : submitText}
+            {loading ? t.processing : authCooldownRemaining > 0 ? `Espera ${authCooldownRemaining}s` : submitText}
           </button>
         </form>
 
