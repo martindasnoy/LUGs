@@ -5479,6 +5479,12 @@ th{background:#f3f4f6}
       .eq("requester_id", userId)
       .eq("status", "pending");
 
+    await supabase
+      .from("lugs")
+      .update({ open_access: false })
+      .eq("lug_id", lugId)
+      .eq("open_access", true);
+
     setCurrentLugId(lugId);
     setSettingsLugId(lugId);
     setRolLug("common");
@@ -5487,6 +5493,10 @@ th{background:#f3f4f6}
     await loadMasterLugs();
     setRequestActionLoadingLugId(null);
     setStatus(`Ingresaste directo a ${lugName}.`);
+  }
+
+  function canDirectJoinLug(lug: MasterLugItem) {
+    return Boolean(lug.open_access) && Number(lug.members_count ?? 0) === 0;
   }
 
   async function deleteOpenLugFromMaster(lugId: string, lugName: string) {
@@ -5526,7 +5536,7 @@ th{background:#f3f4f6}
   }
 
   function startLugAccessAction(lug: MasterLugItem) {
-    const nextType: PendingLugAccessAction["type"] = lug.open_access ? "direct" : "request";
+    const nextType: PendingLugAccessAction["type"] = canDirectJoinLug(lug) ? "direct" : "request";
 
     if (currentLugId && currentLugId !== lug.lug_id) {
       setPendingLugAccessAction({
@@ -9095,34 +9105,36 @@ th{background:#f3f4f6}
                         <p className="text-sm text-slate-500">{labels.noOtherLugs}</p>
                       ) : (
                         <ul className="space-y-2">
-                          {otherLugs.map((lug) => (
-                            <li
-                              key={lug.lug_id}
-                              onDoubleClick={() => void openLugInfoPanel(lug.lug_id)}
-                              className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-200 p-2"
-                            >
-                              <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                                {lug.logo_data_url ? (
-                                  <Image
-                                    src={lug.logo_data_url}
-                                    alt={lug.nombre}
-                                    width={44}
-                                    height={44}
-                                    unoptimized
-                                    className="h-full w-full object-cover"
-                                  />
-                                ) : null}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
-                                <p className="truncate text-xs text-slate-600">{`${lug.pais ?? labels.noCountry} - ${lug.members_count} ${labels.membersSuffix}`}</p>
-                              </div>
-                              <button
-                                type="button"
-                                disabled={requestActionLoadingLugId === lug.lug_id}
+                          {otherLugs.map((lug) => {
+                            const canDirectJoin = canDirectJoinLug(lug);
+                            return (
+                              <li
+                                key={lug.lug_id}
+                                onDoubleClick={() => void openLugInfoPanel(lug.lug_id)}
+                                className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-200 p-2"
+                              >
+                                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                                  {lug.logo_data_url ? (
+                                    <Image
+                                      src={lug.logo_data_url}
+                                      alt={lug.nombre}
+                                      width={44}
+                                      height={44}
+                                      unoptimized
+                                      className="h-full w-full object-cover"
+                                    />
+                                  ) : null}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
+                                  <p className="truncate text-xs text-slate-600">{`${lug.pais ?? labels.noCountry} - ${lug.members_count} ${labels.membersSuffix}`}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={requestActionLoadingLugId === lug.lug_id}
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    if (lug.open_access) {
+                                    if (canDirectJoin) {
                                       startLugAccessAction(lug);
                                     } else if (requestedLugIds.includes(lug.lug_id)) {
                                       void cancelLugJoinRequest(lug.lug_id, lug.nombre);
@@ -9130,18 +9142,19 @@ th{background:#f3f4f6}
                                       startLugAccessAction(lug);
                                     }
                                   }}
-                                className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
-                              >
-                                {requestActionLoadingLugId === lug.lug_id
-                                  ? t.processing
-                                  : lug.open_access
-                                    ? labels.enterDirect
-                                    : requestedLugIds.includes(lug.lug_id)
-                                    ? labels.cancelRequest
-                                    : labels.requestJoin}
-                              </button>
-                            </li>
-                          ))}
+                                  className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                                >
+                                  {requestActionLoadingLugId === lug.lug_id
+                                    ? t.processing
+                                    : canDirectJoin
+                                      ? labels.enterDirect
+                                      : requestedLugIds.includes(lug.lug_id)
+                                        ? labels.cancelRequest
+                                        : labels.requestJoin}
+                                </button>
+                              </li>
+                            );
+                          })}
                         </ul>
                       )}
                     </div>
