@@ -2120,7 +2120,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMinifigSeriesLoading(true);
 
     try {
-      const response = await fetch("/api/rebrickable/minifigures/themes", { cache: "no-store" });
+      const authHeaders = await getSupabaseAuthHeaders();
+      const response = await fetch("/api/rebrickable/minifigures/themes", { cache: "no-store", headers: authHeaders });
       const payload = (await response.json()) as {
         error?: string;
         results?: Array<CollectibleSeriesItem>;
@@ -2175,7 +2176,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       setMinifigSeriesRows([]);
       setMinifigSeriesLoading(false);
     }
-  }, [supabase, t.errorPrefix, userId]);
+  }, [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId]);
 
   const checkedMinifigSeriesIds = useMemo(
     () => Object.entries(minifigSeriesCheckedById).filter(([, checked]) => checked).map(([id]) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
@@ -2370,7 +2371,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       try {
         const encodedSetNum = encodeURIComponent(setNum);
-        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store" });
+        const authHeaders = await getSupabaseAuthHeaders();
+        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigurePartItem>;
@@ -2436,7 +2438,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         setMinifigMissingPartsPreviewLoadingBySetNum((prev) => ({ ...prev, [setNum]: false }));
       }
     },
-    [minifigMissingPartsPreviewBySetNum, minifigMissingPartsPreviewLoadingBySetNum, supabase, t.errorPrefix, userId],
+    [getSupabaseAuthHeaders, minifigMissingPartsPreviewBySetNum, minifigMissingPartsPreviewLoadingBySetNum, supabase, t.errorPrefix, userId],
   );
 
   const loadMinifigFiguresForSeries = useCallback(
@@ -2447,7 +2449,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: true }));
       try {
-        const response = await fetch(`/api/rebrickable/minifigures/themes/${seriesId}/figures`, { cache: "no-store" });
+        const authHeaders = await getSupabaseAuthHeaders();
+        const response = await fetch(`/api/rebrickable/minifigures/themes/${seriesId}/figures`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigureItem>;
@@ -2525,7 +2528,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: false }));
       }
     },
-    [loadMissingPartsPreviewForSet, minifigFiguresLoadingBySeriesId, supabase, t.errorPrefix, userId],
+    [getSupabaseAuthHeaders, loadMissingPartsPreviewForSet, minifigFiguresLoadingBySeriesId, supabase, t.errorPrefix, userId],
   );
 
   const saveMinifigSetOwnedState = useCallback(
@@ -2632,7 +2635,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       try {
         const encodedSetNum = encodeURIComponent(figure.set_num);
-        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store" });
+        const authHeaders = await getSupabaseAuthHeaders();
+        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigurePartItem>;
@@ -2765,7 +2769,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         setMinifigPartsLoading(false);
       }
     },
-    [supabase, t.errorPrefix, userId],
+    [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId],
   );
 
   const openMinifigurasSection = useCallback(async (options?: { navigate?: boolean }) => {
