@@ -4160,7 +4160,19 @@ th{background:#f3f4f6}
       .eq("status", "pending");
 
     if (error) {
-      setStatus(`${t.errorPrefix}: ${error.message}`);
+      const fallback = await supabase.rpc("get_dashboard_bootstrap");
+      if (fallback.error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        return;
+      }
+
+      const bootstrapRows = (fallback.data ?? []) as Array<Record<string, unknown>>;
+      const profileData = bootstrapRows[0] ?? null;
+      const pendingLugIdsRaw = Array.isArray(profileData?.my_pending_lug_ids) ? profileData.my_pending_lug_ids : [];
+      const pendingLugIds = pendingLugIdsRaw
+        .map((value) => String(value ?? "").trim())
+        .filter((value) => value.length > 0);
+      setRequestedLugIds(pendingLugIds);
       return;
     }
 
@@ -4183,7 +4195,16 @@ th{background:#f3f4f6}
       .eq("status", "pending");
 
     if (error) {
-      setStatus(`${t.errorPrefix}: ${error.message}`);
+      const fallback = await supabase.rpc("get_lug_pending_requests", {
+        target_lug_id: lugId,
+      });
+      if (fallback.error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        return;
+      }
+
+      const fallbackRows = (fallback.data ?? []) as Array<Record<string, unknown>>;
+      setAdminPendingRequestsCount(fallbackRows.length);
       return;
     }
 
@@ -4236,7 +4257,14 @@ th{background:#f3f4f6}
       .eq("status", "pending");
 
     if (error) {
-      setStatus(`${t.errorPrefix}: ${error.message}`);
+      const fallback = await supabase.rpc("get_master_empty_lug_notifications");
+      if (fallback.error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        return;
+      }
+
+      const fallbackRows = (fallback.data ?? []) as Array<Record<string, unknown>>;
+      setMasterEmptyNotificationsCount(fallbackRows.length);
       return;
     }
 
@@ -4648,6 +4676,14 @@ th{background:#f3f4f6}
   }, [loadMyJoinRequests, loadUserState, supabase, userEmail, userId]);
 
   useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    void loadMyJoinRequests(userId);
+  }, [loadMyJoinRequests, userId]);
+
+  useEffect(() => {
     if (!supabase || !userId || rolLug !== "admin" || !currentLugId) {
       return;
     }
@@ -4678,6 +4714,8 @@ th{background:#f3f4f6}
       return;
     }
 
+    void loadAdminPendingRequestsCount(currentLugId);
+
     const intervalId = window.setInterval(() => {
       void loadAdminPendingRequestsCount(currentLugId);
     }, 5000);
@@ -4702,6 +4740,8 @@ th{background:#f3f4f6}
       return;
     }
 
+    void loadMasterEmptyNotificationsCount();
+
     const intervalId = window.setInterval(() => {
       void loadMasterEmptyNotificationsCount();
     }, 5000);
@@ -4713,6 +4753,8 @@ th{background:#f3f4f6}
     if (!showMasterEmptyLugsPanel) {
       return;
     }
+
+    void loadMasterEmptyNotificationsList();
 
     const intervalId = window.setInterval(() => {
       void loadMasterEmptyNotificationsList();
