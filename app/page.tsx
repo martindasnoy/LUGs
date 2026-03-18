@@ -1316,9 +1316,18 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     try {
+      let authHeaders: Record<string, string> | undefined;
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+        if (accessToken) {
+          authHeaders = { Authorization: `Bearer ${accessToken}` };
+        }
+      }
+
       const response = await fetch("/api/profiles/names", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
         body: JSON.stringify({ ids: cleanIds }),
       });
       const json = (await response.json()) as { names?: Record<string, string> };
@@ -1327,7 +1336,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     } catch {
       return new Map<string, string>();
     }
-  }, []);
+  }, [supabase]);
   const panelFilteredParts = useMemo(() => {
     const looksPrinted = (part: PartCatalogItem) => {
       if (typeof part.is_printed === "boolean") {
