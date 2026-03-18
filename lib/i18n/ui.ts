@@ -1,10 +1,11 @@
-export const uiLanguages = ["es", "en"] as const;
+export const uiLanguages = ["es", "en", "pt"] as const;
 
 export type UiLanguage = (typeof uiLanguages)[number];
 
 export const uiLanguageLabels: Record<UiLanguage, string> = {
   es: "Espanol",
   en: "English",
+  pt: "Portugues",
 };
 
 type UiDictionary = {
@@ -59,5 +60,22 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     settingsTitle: "User settings",
     logout: "Logout",
     language: "Language",
+  },
+  pt: {
+    appAccessTitle: "LUGs App - Acesso",
+    register: "Registrar",
+    login: "Login",
+    email: "Email",
+    password: "Senha",
+    processing: "Processando...",
+    createAccount: "Criar conta",
+    signIn: "Entrar",
+    missingEnv: "Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    accountCreated: "Conta criada. Verifique seu email para confirmar.",
+    errorPrefix: "Erro",
+    settingsAria: "Configuracoes do usuario",
+    settingsTitle: "Configuracoes do usuario",
+    logout: "Sair",
+    language: "Idioma",
   },
 };

@@ -10,7 +10,12 @@ export async function GET(
   const safeName = path.basename(name);
   const normalized = safeName.toLowerCase();
 
-  if (!normalized.endsWith(".png") && !normalized.endsWith(".jpg") && !normalized.endsWith(".jpeg") && !normalized.endsWith(".svg")) {
+  if (
+    !normalized.endsWith(".png") &&
+    !normalized.endsWith(".jpg") &&
+    !normalized.endsWith(".jpeg") &&
+    !normalized.endsWith(".svg")
+  ) {
     return NextResponse.json({ error: "Invalid file" }, { status: 400 });
   }
 

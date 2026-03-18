@@ -1,11 +1,14 @@
 import Home from "../../page";
 
 type Props = {
-  params: {
+  params: Promise<{
+    id: string;
+  }> | {
     id: string;
   };
 };
 
-export default function ListaDetallePage({ params }: Props) {
-  return <Home initialSection="listas" initialListId={params.id} />;
+export default async function ListaDetallePage({ params }: Props) {
+  const resolvedParams = await Promise.resolve(params);
+  return <Home initialSection="listas" initialListId={resolvedParams.id} />;
 }

@@ -14,7 +14,7 @@
 [OK] Checkbox "pieza en color existente" en linea de color.
 
 [TODO] Buscador de piezas (definir y cerrar UX final del buscador principal).
-[TODO] Paginas independientes (/dashboard, /listas, /listas/[id], etc.).
+[OK] Paginas independientes (/dashboard, /listas, /listas/[id], etc.).
 [OK] Agregado de piezas: terminar flujo final de colores e imagenes (detalles UX finales).
 [TODO] Exportar: implementar logica real (CSV/BrickLink/XML a definir).
 [TODO] Confirmacion visual al agregar item (toast/estado visible y consistente).

@@ -56,6 +56,24 @@
   - Adds local cache table for per-part color availability and color-specific images.
 - `supabase/migrations/0027_add_imgmatchcolor_to_list_items.sql`
   - Adds persisted `imgmatchcolor` flag in `list_items` to avoid recalculating color-image match at runtime.
+- `supabase/migrations/0028_create_wishlist_item_offers.sql`
+  - Adds wishlist offers table so members can offer quantity on public wishlist items.
+- `supabase/migrations/0029_add_value_to_list_items.sql`
+  - Adds `list_items.value` (price) with non-negative constraint for sale lists.
+- `supabase/migrations/0030_fix_handle_new_user_username_conflicts.sql`
+  - Makes `handle_new_user` resilient to duplicate usernames (same local-part email) to avoid signup failures.
+- `supabase/migrations/0031_add_footer_legend_to_app_maintenance.sql`
+  - Adds customizable footer legend and extends dashboard bootstrap with `maintenance_footer_legend`.
+- `supabase/migrations/0032_create_minifigure_series_catalog.sql`
+  - Adds local cache table for minifigure collectible series.
+- `supabase/migrations/0033_create_minifig_user_inventory.sql`
+  - Adds per-user minifigure and minifigure-part inventory tables with RLS.
+- `supabase/migrations/0034_add_minifig_preferences.sql`
+  - Adds per-user series selection/favorites, UI preference flags, and minifigure favorites.
+- `supabase/migrations/0035_create_minifig_catalog_sets_and_parts.sql`
+  - Adds local minifigure sets and set-parts catalog tables for a Rebrickable-free Minifiguras section.
+- `supabase/migrations/0036_add_parts_import_status_to_minifigure_sets_catalog.sql`
+  - Adds `parts_import_status` to track pending/imported/empty sets and avoid retrying known-empty imports.
 
 ## How to run in Supabase dashboard
 
@@ -87,6 +105,15 @@
 26. Run `0025_create_parts_catalog_and_search_rpc.sql`.
 27. Run `0026_create_part_color_catalog.sql`.
 28. Run `0027_add_imgmatchcolor_to_list_items.sql`.
+29. Run `0028_create_wishlist_item_offers.sql`.
+30. Run `0029_add_value_to_list_items.sql`.
+31. Run `0030_fix_handle_new_user_username_conflicts.sql`.
+32. Run `0031_add_footer_legend_to_app_maintenance.sql`.
+33. Run `0032_create_minifigure_series_catalog.sql`.
+34. Run `0033_create_minifig_user_inventory.sql`.
+35. Run `0034_add_minifig_preferences.sql`.
+36. Run `0035_create_minifig_catalog_sets_and_parts.sql`.
+37. Run `0036_add_parts_import_status_to_minifigure_sets_catalog.sql`.
 
 ## Notes
 

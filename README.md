@@ -18,6 +18,20 @@ Required values:
 - `REBRICKABLE_API_KEY` (server-side only, never expose as `NEXT_PUBLIC_*`)
 - `REBRICKABLE_API_BASE_URL` (default: `https://rebrickable.com/api/v3`)
 
+Optional (for Meilisearch-backed part search):
+
+- `MEILISEARCH_HOST`
+- `MEILISEARCH_API_KEY`
+- `MEILISEARCH_PARTS_INDEX` (default: `parts_catalog`)
+
+## Sync parts into Meilisearch
+
+After `parts_catalog` is populated, build/update the Meilisearch index with:
+
+```bash
+npm run sync:meilisearch:parts
+```
+
 ## Sync Rebrickable categories
 
 After running Supabase migration `0025_create_parts_catalog_and_search_rpc.sql`, sync categories with:

@@ -66,9 +66,37 @@ type PendingLugAccessAction = {
   lug_name: string;
 };
 
-type AppSection = "dashboard" | "listas" | "lista_detalle";
+type AppSection = "dashboard" | "listas" | "lista_detalle" | "mi_lug" | "minifiguras";
 type ListaTipo = "deseos" | "venta";
 type ListaVisibilidad = "privado" | "publico";
+
+type CollectibleSeriesItem = {
+  id: number;
+  name: string;
+  year_from: number | null;
+  year_to: number | null;
+  set_count: number;
+};
+
+type MinifigFigureItem = {
+  set_num: string;
+  name: string;
+  set_img_url: string | null;
+  num_parts: number;
+  year: number | null;
+  theme_id: number | null;
+};
+
+type MinifigFigurePartItem = {
+  row_id: string;
+  part_num: string;
+  part_name: string;
+  color_name: string;
+  part_img_url: string | null;
+  quantity: number;
+};
+
+type MinifigFiguresFilter = "all" | "missing" | "complete" | "favorite";
 
 type ListaItem = {
   id: string;
@@ -143,82 +171,71 @@ function normalizeDimensionText(value: string) {
     .trim();
 }
 
-function buildSearchVariants(raw: string) {
-  const base = raw.trim();
-  const compact = base.replace(/\s*x\s*/gi, "x").replace(/\s+/g, " ").trim();
-  const spaced = base.replace(/\s*x\s*/gi, " x ").replace(/\s+/g, " ").trim();
-  return Array.from(new Set([base, compact, spaced].filter((value) => value.length > 0)));
+function getPartImageKey(partNum: string, colorName: string | null | undefined) {
+  const normalizedColor = String(colorName ?? "").trim().toLowerCase();
+  return `${partNum.trim()}::${normalizedColor}`;
 }
 
-function extractSearchTokens(raw: string) {
-  return normalizeDimensionText(raw)
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-function tokenMatchesSearchText(searchText: string, token: string) {
-  if (searchText.includes(token)) {
-    return true;
-  }
-
-  const compactSearch = searchText.replace(/\s+/g, "");
-  const compactToken = token.replace(/\s+/g, "");
-  return compactSearch.includes(compactToken);
+function getColorHexFromName(colorName: string | null, availableColors: Array<{ name: string; blName?: string; hex: string }>) {
+  if (!colorName) return "#d1d5db";
+  const normalized = colorName.replace("(Chino)", "").trim().toLowerCase();
+  const match = availableColors.find((c) => {
+    const lego = c.name.toLowerCase();
+    const bl = (c.blName ?? "").trim().toLowerCase();
+    return normalized === lego || (bl.length > 0 && normalized === bl);
+  });
+  const hex = match?.hex ?? "d1d5db";
+  return hex.startsWith("#") ? hex : `#${hex}`;
 }
 
-function isPrintedPart(part: Pick<PartCatalogItem, "part_num" | "name" | "is_printed">) {
-  if (typeof part.is_printed === "boolean") {
-    return part.is_printed;
-  }
-  const code = String(part.part_num ?? "").toLowerCase();
-  const title = String(part.name ?? "").toLowerCase();
-  return /pb|pr|pat/.test(code) || title.includes("pattern") || title.includes("printed");
+function getTextColorForBackground(hex: string) {
+  const normalized = hex.replace("#", "").trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return "#111827";
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  return brightness > 150 ? "#111827" : "#ffffff";
 }
 
-function scoreSearchResult(part: PartCatalogItem, normalizedQuery: string, tokens: string[]) {
-  const code = part.part_num.toLowerCase();
-  const name = part.name.toLowerCase();
-  const normalizedName = normalizeDimensionText(name);
-  const normalizedSearchText = normalizeDimensionText(`${part.part_num} ${part.name}`);
+function buildSocialUrl(platform: string | null, handle: string | null) {
+  const cleanHandle = String(handle ?? "").trim();
+  if (!cleanHandle) return null;
+  if (/^https?:\/\//i.test(cleanHandle)) return cleanHandle;
 
-  let score = 0;
-  if (code === normalizedQuery || code === normalizedQuery.replace(/^#/, "")) {
-    score += 120;
-  } else if (code.startsWith(normalizedQuery.replace(/^#/, ""))) {
-    score += 80;
-  } else if (code.includes(normalizedQuery.replace(/^#/, ""))) {
-    score += 40;
-  }
+  const normalizedHandle = cleanHandle.replace(/^@+/, "");
+  const normalizedPlatform = String(platform ?? "").trim().toLowerCase();
+  if (normalizedPlatform === "instagram") return `https://instagram.com/${normalizedHandle}`;
+  if (normalizedPlatform === "facebook") return `https://facebook.com/${normalizedHandle}`;
+  return null;
+}
 
-  if (normalizedName.includes(normalizedQuery)) {
-    score += 60;
-  } else if (name.includes(normalizedQuery)) {
-    score += 40;
+function getSocialPlatformLabel(platform: string | null) {
+  const normalizedPlatform = String(platform ?? "").trim().toLowerCase();
+  if (normalizedPlatform === "instagram") {
+    return { logo: "IG", bg: "#ec4899" };
   }
+  if (normalizedPlatform === "facebook") {
+    return { logo: "f", bg: "#2563eb" };
+  }
+  return { logo: "@", bg: "#64748b" };
+}
 
-  const tokenMatches = tokens.reduce((acc, token) => (normalizedSearchText.includes(token) ? acc + 1 : acc), 0);
-  score += tokenMatches * 20;
+function getMinifigPartInventoryKey(setNum: string, partNum: string, colorName: string) {
+  return `${setNum}::${partNum}::${colorName}`;
+}
 
-  if (!isPrintedPart(part)) {
-    score += 30;
-  }
-
-  if (normalizedName.includes("modulex")) {
-    score -= 120;
-  }
-  if (normalizedName.includes("duplo")) {
-    score -= 120;
-  }
-  if (normalizedName.includes("print") || normalizedName.includes("printed")) {
-    score -= 80;
-  }
-  if (/\bno\.\s*\d+/i.test(name)) {
-    score -= 80;
-  }
-
-  score += Math.max(0, 30 - Math.min(30, part.name.length));
-  return score;
+function getMissingMinifigPartRows(rows: MinifigFigurePartItem[], checkedByRowId: Record<string, boolean>) {
+  return rows.filter((row) => checkedByRowId[row.row_id] === false);
 }
 
 type ListPartItem = {
@@ -229,6 +246,49 @@ type ListPartItem = {
   imgmatchcolor: boolean;
   display_color_label: string | null;
   part_img_url: string | null;
+  quantity: number;
+  value: number | null;
+};
+
+type Lot = {
+  id: string;
+  part_num: string;
+  part_name: string;
+  color_name: string | null;
+  quantity: number;
+  value?: number | null;
+};
+
+type PartImageLookup = Record<string, string | null>;
+
+type MiLugPoolItem = {
+  id: string;
+  part_num: string;
+  part_name: string;
+  part_img_url: string | null;
+  color_label: string | null;
+  list_type: "deseos" | "venta";
+  publisher_id: string;
+  quantity: number;
+  requested_quantity: number;
+  remaining_quantity: number;
+  current_user_offer_quantity: number;
+  value: number | null;
+  publisher_name: string;
+};
+
+type WishlistOfferDetail = {
+  offer_id: string;
+  list_item_id: string;
+  requester_id: string;
+  requester_name: string;
+  quantity: number;
+};
+
+type OfferSummaryRow = {
+  id: string;
+  userName: string;
+  partLabel: string;
   quantity: number;
 };
 
@@ -261,7 +321,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     const stored = window.localStorage.getItem("ui_language");
-    return stored === "en" ? "en" : "es";
+    return stored === "en" || stored === "pt" ? stored : "es";
   });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -294,9 +354,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
   const [maintenanceMessageLine1, setMaintenanceMessageLine1] = useState("Estamos en mantenimiento");
   const [maintenanceMessageLine2, setMaintenanceMessageLine2] = useState("Volvé en un rato");
+  const [footerLegend, setFooterLegend] = useState("LUGs App");
   const [showMaintenancePanel, setShowMaintenancePanel] = useState(false);
   const [maintenanceDraftMessageLine1, setMaintenanceDraftMessageLine1] = useState("");
   const [maintenanceDraftMessageLine2, setMaintenanceDraftMessageLine2] = useState("");
+  const [maintenanceDraftFooterLegend, setMaintenanceDraftFooterLegend] = useState("");
 
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -306,6 +368,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [isMaster, setIsMaster] = useState(false);
 
   const [showUserSettings, setShowUserSettings] = useState(false);
+  const [showLanguagePickerPopup, setShowLanguagePickerPopup] = useState(false);
+  const [languageChanging, setLanguageChanging] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsNameInput, setSettingsNameInput] = useState("");
   const [settingsEmailInput, setSettingsEmailInput] = useState("");
@@ -391,11 +455,36 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     const stored = window.localStorage.getItem("active_section_v1");
-    if (stored === "listas" || stored === "lista_detalle") {
+    if (stored === "listas" || stored === "lista_detalle" || stored === "mi_lug" || stored === "minifiguras") {
       return stored;
     }
     return "dashboard";
   });
+  const [minifigSeriesRows, setMinifigSeriesRows] = useState<CollectibleSeriesItem[]>([]);
+  const [minifigSeriesLoading, setMinifigSeriesLoading] = useState(false);
+  const [minifigSeriesCheckedById, setMinifigSeriesCheckedById] = useState<Record<number, boolean>>({});
+  const [minifigSeriesFavoriteById, setMinifigSeriesFavoriteById] = useState<Record<number, boolean>>({});
+  const [showOnlyFavoriteSeries, setShowOnlyFavoriteSeries] = useState(false);
+  const [showMinifigSeriesPopup, setShowMinifigSeriesPopup] = useState(false);
+  const [minifigFiguresBySeriesId, setMinifigFiguresBySeriesId] = useState<Record<number, MinifigFigureItem[]>>({});
+  const [minifigFiguresLoadingBySeriesId, setMinifigFiguresLoadingBySeriesId] = useState<Record<number, boolean>>({});
+  const [minifigFigureCheckedBySetNum, setMinifigFigureCheckedBySetNum] = useState<Record<string, boolean>>({});
+  const [minifigFigureFavoriteBySetNum, setMinifigFigureFavoriteBySetNum] = useState<Record<string, boolean>>({});
+  const [showOnlyFavoriteFigures, setShowOnlyFavoriteFigures] = useState(false);
+  const [minifigFiguresFilter, setMinifigFiguresFilter] = useState<MinifigFiguresFilter>("all");
+  const [minifigSearchQuery, setMinifigSearchQuery] = useState("");
+  const [minifigSearchResults, setMinifigSearchResults] = useState<MinifigFigureItem[]>([]);
+  const [minifigSearchLoading, setMinifigSearchLoading] = useState(false);
+  const [selectedMinifigForImagePopup, setSelectedMinifigForImagePopup] = useState<MinifigFigureItem | null>(null);
+  const [showMinifigPartsPopup, setShowMinifigPartsPopup] = useState(false);
+  const [selectedMinifigForParts, setSelectedMinifigForParts] = useState<MinifigFigureItem | null>(null);
+  const [minifigPartsRows, setMinifigPartsRows] = useState<MinifigFigurePartItem[]>([]);
+  const [minifigPartsLoading, setMinifigPartsLoading] = useState(false);
+  const [minifigPartCheckedByRowId, setMinifigPartCheckedByRowId] = useState<Record<string, boolean>>({});
+  const [minifigSetHasMissingPartsBySetNum, setMinifigSetHasMissingPartsBySetNum] = useState<Record<string, boolean>>({});
+  const [minifigMissingPartsPreviewBySetNum, setMinifigMissingPartsPreviewBySetNum] = useState<Record<string, MinifigFigurePartItem[]>>({});
+  const [minifigMissingPartsPreviewLoadingBySetNum, setMinifigMissingPartsPreviewLoadingBySetNum] = useState<Record<string, boolean>>({});
+  const [minifigGlobalOwnedStats, setMinifigGlobalOwnedStats] = useState({ complete: 0, missing: 0, total: 0, favorites: 0 });
   const [showCreateListaPanel, setShowCreateListaPanel] = useState(false);
   const [newListaTipo, setNewListaTipo] = useState<ListaTipo>("deseos");
   const [newListaNombre, setNewListaNombre] = useState("");
@@ -407,6 +496,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [selectedListForItems, setSelectedListForItems] = useState<ListaItem | null>(null);
   const [listItemsLoading, setListItemsLoading] = useState(false);
   const [listItemsRows, setListItemsRows] = useState<ListPartItem[]>([]);
+  const [listItemsPage, setListItemsPage] = useState(1);
   const [partsCategories, setPartsCategories] = useState<PartCategoryItem[]>([]);
   const [partsSearchQuery, setPartsSearchQuery] = useState("");
   const [partsSearchResults, setPartsSearchResults] = useState<PartCatalogItem[]>([]);
@@ -434,19 +524,745 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [addItemColorExists, setAddItemColorExists] = useState(true);
   const [partAvailableColorNames, setPartAvailableColorNames] = useState<string[]>([]);
   const [addItemQuantity, setAddItemQuantity] = useState(1);
+  const [addItemPriceInput, setAddItemPriceInput] = useState("");
   const [selectedSearchPartNum, setSelectedSearchPartNum] = useState<string | null>(null);
   const [selectedPartColorImageUrl, setSelectedPartColorImageUrl] = useState<string | null>(null);
   const [selectedPartColorImageMissing, setSelectedPartColorImageMissing] = useState(false);
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({});
+  const [itemPriceInputs, setItemPriceInputs] = useState<Record<string, string>>({});
+  const [miLugPoolWishlistItems, setMiLugPoolWishlistItems] = useState<MiLugPoolItem[]>([]);
+  const [miLugPoolSaleItems, setMiLugPoolSaleItems] = useState<MiLugPoolItem[]>([]);
+  const [miLugHeaderName, setMiLugHeaderName] = useState<string | null>(null);
+  const [miLugHeaderLogo, setMiLugHeaderLogo] = useState<string | null>(null);
+  const [miLugWishlistSort, setMiLugWishlistSort] = useState<"codigo" | "color" | "usuario">("codigo");
+  const [miLugSaleSort, setMiLugSaleSort] = useState<"codigo" | "color" | "usuario" | "price_asc" | "price_desc">("codigo");
+  const [miLugWishlistPage, setMiLugWishlistPage] = useState(1);
+  const [miLugSalePage, setMiLugSalePage] = useState(1);
+  const [miLugExpandedPool, setMiLugExpandedPool] = useState<"wishlist" | "venta" | null>("wishlist");
+  const [miLugPoolsLoading, setMiLugPoolsLoading] = useState(false);
+  const [selectedMiLugPoolItem, setSelectedMiLugPoolItem] = useState<{ type: "wishlist" | "venta"; item: MiLugPoolItem } | null>(null);
+  const [miLugOfferQuantityInput, setMiLugOfferQuantityInput] = useState("1");
+  const [showMiLugMembersPanel, setShowMiLugMembersPanel] = useState(false);
+  const [miLugMembersLoading, setMiLugMembersLoading] = useState(false);
+  const [miLugMembersRows, setMiLugMembersRows] = useState<LugMemberItem[]>([]);
+  const [listItemOffersById, setListItemOffersById] = useState<Record<string, WishlistOfferDetail[]>>({});
+  const [selectedListItemOffers, setSelectedListItemOffers] = useState<{
+    partLabel: string;
+    requestedQuantity: number;
+    offers: WishlistOfferDetail[];
+  } | null>(null);
+  const [showOffersGivenPanel, setShowOffersGivenPanel] = useState(false);
+  const [showOffersReceivedPanel, setShowOffersReceivedPanel] = useState(false);
+  const [offersGivenRows, setOffersGivenRows] = useState<OfferSummaryRow[]>([]);
+  const [offersReceivedRows, setOffersReceivedRows] = useState<OfferSummaryRow[]>([]);
+  const [offersPanelsLoading, setOffersPanelsLoading] = useState(false);
   const colorDropdownRef = useRef<HTMLDivElement | null>(null);
   const partSearchDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const t = useMemo(() => uiTranslations[language], [language]);
+  const labels = useMemo(() => {
+    if (language === "en") {
+      return {
+        back: "Back",
+        lists: "Lists",
+        createList: "Create list",
+        yourWishlists: "Your wishlists",
+        yourSaleLists: "Your sale lists",
+        noWishlistLists: "No wishlist lists.",
+        noSaleLists: "No sale lists.",
+        renameListTitle: "Rename list",
+        private: "Private",
+        public: "Public",
+        deleteList: "Delete list",
+        offeredToOthers: "Parts offered to others",
+        offeredToMe: "Parts offered to me",
+        print: "Print",
+        close: "Close",
+        cancel: "Cancel",
+        loading: "Loading...",
+        noOffersRegistered: "No offers registered.",
+        noOffersReceived: "No offers received.",
+        members: "Members",
+        makeAdmin: "Make Admin",
+        loadingMembers: "Loading members...",
+        noMembers: "No members to display.",
+        poolWishlist: "Wishlist Pool",
+        poolSales: "Sales Pool",
+        noPublicWishlist: "No public parts in wishlist.",
+        noPublicSales: "No public parts for sale.",
+        iHave: "I have it",
+        minifigPending: "Minifigures in preparation.",
+        userSettings: "User settings",
+        name: "Name",
+        mail: "Email",
+        changePassword: "Change password",
+        hidePasswordChange: "Hide password change",
+        newPassword: "New password",
+        repeatPassword: "Repeat password",
+        lug: "LUG",
+        socialNetwork: "Social network",
+        none: "None",
+        userPlaceholder: "user",
+        doubleClickSelect: "Double click to select",
+        save: "Save",
+        saving: "Saving...",
+        lugProperties: "LUG properties",
+        lugInformation: "LUG information",
+        loadingLugInfo: "Loading LUG information...",
+        noLug: "No LUG",
+        noName: "No name",
+        noCountry: "No country",
+        noDescription: "No description",
+        lugsList: "LUG list",
+        mustJoinOrCreateLug: "You must join or create a LUG to continue.",
+        doubleClickLugInfo: "Double click a LUG to view details.",
+        loadingLugs: "Loading LUGs...",
+        noLugsLoaded: "No LUGs loaded.",
+        yourLug: "Your LUG",
+        noOtherLugs: "No other LUGs to show.",
+        membersSuffix: "members",
+        enterDirect: "Enter directly",
+        cancelRequest: "Cancel request",
+        requestJoin: "Request access",
+        createNewLug: "Create new LUG",
+        requestJoinTitle: "Request access",
+        writeMessage: "Write a message",
+        send: "Send",
+        sending: "Sending...",
+        lugInfoTitle: "LUG information",
+        loadingInfo: "Loading information...",
+        noMembersLoaded: "No members loaded.",
+        noSocial: "No social network",
+        noLugDetail: "Could not load LUG detail.",
+        joinRequestsTitle: "Join requests",
+        loadingJoinRequests: "Loading requests...",
+        noPendingRequests: "No pending requests.",
+        emptyLugsTitle: "Empty LUGs",
+        loadingEmptyLugs: "Loading empty LUGs...",
+        noPendingEmptyLugs: "No pending empty LUGs.",
+        deleteLug: "Delete LUG",
+        leaveOpen: "Leave open",
+        addItem: "Add item",
+        categories: "Categories",
+        noImage: "No image",
+        searchPlaceholder: "Search part by name, code or #code",
+        searching: "Searching...",
+        noResults: "No results.",
+        loadingList: "Loading list...",
+        loadingParts: "Loading parts...",
+        noCategoriesToShow: "No categories to show. First sync the catalog.",
+        wishlistListType: "Wishlist",
+        saleListType: "Sale list",
+        listNamePlaceholder: "List name",
+        renameList: "Rename list",
+        yes: "Yes",
+        no: "No",
+        deleteListConfirm: "Are you sure you want to delete the list? Information about all parts inside will be lost.",
+        price: "Price",
+        itemsOfList: "List items",
+        listHasNoPartsYet: "This list has no parts yet.",
+        someoneOffersThisPart: "Someone offers you this part",
+        catalog: "Catalog",
+        noPartsToShow: "No parts to show.",
+        sortCode: "Code",
+        sortColor: "Color",
+        sortUser: "User",
+        sortPriceAsc: "$ low to high",
+        sortPriceDesc: "$ high to low",
+        masterPanel: "Master Panel",
+        createLug: "Create LUG",
+        doubleClickAssignLug: "Double click a LUG to set it as current.",
+        loadingPhrasesTitle: "Loading phrases",
+        loadingPhrasesHelp: "Edit and save phrases. They will apply in future loads.",
+        maintenanceLockTitle: "Maintenance lock",
+        enableMaintenance: "Enable maintenance",
+        maintenanceLine1: "Line 1 phrase",
+        maintenanceLine2: "Line 2 phrase",
+        maintenanceLine1Placeholder: "Write the first line",
+        maintenanceLine2Placeholder: "Write the second line",
+        preview: "Preview",
+        switchLug: "Switch LUG",
+        uploadLogoMax: "Upload logo image (max 500x500)",
+        countryCity: "Country / city",
+        description: "Description",
+        creating: "Creating...",
+        createNewLugShort: "Create new LUG",
+        createLugButton: "Create LUG",
+        leaveCurrentLugOnCreate: "If you continue, you will leave your current LUG.",
+        leaveCurrentLugOnAccess: "If you continue, you will leave your current LUG.",
+        ok: "OK",
+        loadingListById: "Loading list...",
+        noMail: "No email",
+        noColor: "No color",
+        noNameFallback: "No name",
+        noImageCache: "Image not cached",
+        notLegoColor: "(Not LEGO color)",
+        backToCategories: "Back to categories",
+        notPrinted: "Not printed",
+        printed: "Printed",
+        filterAll: "All",
+        filterPopular: "Popular",
+        filterOthers: "Others",
+        maintenanceSection: "Maintenance",
+        disableMaintenance: "Disable maintenance",
+        noMessage: "No message",
+        reject: "Reject",
+        accept: "Accept",
+        offerLine: (name: string, qty: number) => `${name} offers you ${qty} pieces`,
+        existingColorPart: "part in existing color",
+        logo: "Logo",
+        color1: "Color1",
+        color2: "Color2",
+        color3: "Color3",
+        exportUser: "User",
+        exportMail: "Email",
+        exportDate: "Date",
+        exportPiece: "Part",
+        exportQuantity: "Quantity",
+        exportImage: "Image",
+        exportName: "Name",
+        exportColor: "Color",
+        buttonLists: "LISTS",
+        buttonMinifig: "minifigures",
+        buttonLugs: "LUGs",
+        detailSale: "Sale detail",
+        detailWishlist: "Wishlist detail",
+        quantityWord: "Quantity",
+        publishedByWord: "Published by",
+        selectColor: "Select color",
+        exportPdf: "Export to PDF",
+        listLotsCount: "Lots quantity",
+        listPiecesCount: "Pieces quantity",
+        footerLegendLabel: "Footer legend",
+        footerLegendPlaceholder: "Write footer text",
+        footerLegendSave: "Save legend",
+        minifigSectionTitle: "Minifigures",
+        collectibleSeriesTitle: "Collectible series",
+        loadingSeries: "Loading series...",
+        noSeriesFound: "No collectible series found.",
+        selectSeriesHint: "Select a series to continue.",
+        syncMinifigSeries: "Sync minifig series",
+        loadingSeriesItems: "Loading figures...",
+        noSeriesItems: "No figures in this series.",
+        loadingFigureParts: "Loading parts...",
+        noFigureParts: "No parts for this figure.",
+        ownedComplete: "Complete",
+        ownedMissing: "Missing parts",
+        ownedTotal: "Owned",
+        ownedFavorites: "Favorites",
+      };
+    }
+
+    if (language === "pt") {
+      return {
+        back: "Voltar",
+        lists: "Listas",
+        createList: "Criar lista",
+        yourWishlists: "Suas wishlists",
+        yourSaleLists: "Suas listas de venda",
+        noWishlistLists: "Sem listas de wishlist.",
+        noSaleLists: "Sem listas de venda.",
+        renameListTitle: "Renomear lista",
+        private: "Privado",
+        public: "Publico",
+        deleteList: "Excluir lista",
+        offeredToOthers: "Pecas oferecidas a outros",
+        offeredToMe: "Pecas que me ofereceram",
+        print: "Imprimir",
+        close: "Fechar",
+        cancel: "Cancelar",
+        loading: "Carregando...",
+        noOffersRegistered: "Sem ofertas registradas.",
+        noOffersReceived: "Sem ofertas recebidas.",
+        members: "Integrantes",
+        makeAdmin: "Tornar Admin",
+        loadingMembers: "Carregando integrantes...",
+        noMembers: "Sem integrantes para mostrar.",
+        poolWishlist: "Pool de Wishlist",
+        poolSales: "Pool de Vendas",
+        noPublicWishlist: "Sem pecas publicas na wishlist.",
+        noPublicSales: "Sem pecas publicas na venda.",
+        iHave: "Eu tenho",
+        minifigPending: "Minifiguras em preparacao.",
+        userSettings: "Configuracoes do usuario",
+        name: "Nome",
+        mail: "Email",
+        changePassword: "Trocar senha",
+        hidePasswordChange: "Ocultar troca de senha",
+        newPassword: "Nova senha",
+        repeatPassword: "Repetir senha",
+        lug: "LUG",
+        socialNetwork: "Rede social",
+        none: "Nenhuma",
+        userPlaceholder: "usuario",
+        doubleClickSelect: "Duplo clique para selecionar",
+        save: "Salvar",
+        saving: "Salvando...",
+        lugProperties: "Propriedades do LUG",
+        lugInformation: "Informacoes do LUG",
+        loadingLugInfo: "Carregando informacoes do LUG...",
+        noLug: "Sem LUG",
+        noName: "Sem nome",
+        noCountry: "Sem pais",
+        noDescription: "Sem descricao",
+        lugsList: "Lista de LUGs",
+        mustJoinOrCreateLug: "Voce precisa entrar ou criar um LUG para continuar.",
+        doubleClickLugInfo: "Duplo clique em um LUG para ver informacoes.",
+        loadingLugs: "Carregando LUGs...",
+        noLugsLoaded: "Sem LUGs cadastrados.",
+        yourLug: "Seu LUG",
+        noOtherLugs: "Nao ha outros LUGs para mostrar.",
+        membersSuffix: "membros",
+        enterDirect: "Entrar direto",
+        cancelRequest: "Cancelar solicitacao",
+        requestJoin: "Solicitar ingresso",
+        createNewLug: "Criar novo LUG",
+        requestJoinTitle: "Solicitar ingresso",
+        writeMessage: "Escreva uma mensagem",
+        send: "Enviar",
+        sending: "Enviando...",
+        lugInfoTitle: "Informacoes do LUG",
+        loadingInfo: "Carregando informacoes...",
+        noMembersLoaded: "Sem membros carregados.",
+        noSocial: "Sem rede social",
+        noLugDetail: "Nao foi possivel carregar os detalhes do LUG.",
+        joinRequestsTitle: "Solicitacoes de ingresso",
+        loadingJoinRequests: "Carregando solicitacoes...",
+        noPendingRequests: "Sem solicitacoes pendentes.",
+        emptyLugsTitle: "LUGs vazios",
+        loadingEmptyLugs: "Carregando LUGs vazios...",
+        noPendingEmptyLugs: "Sem LUGs vazios pendentes.",
+        deleteLug: "Apagar LUG",
+        leaveOpen: "Deixar aberto",
+        addItem: "Adicionar item",
+        categories: "Categorias",
+        noImage: "Sem imagem",
+        searchPlaceholder: "Buscar peca por nome, codigo ou #codigo",
+        searching: "Buscando...",
+        noResults: "Sem resultados.",
+        loadingList: "Carregando lista...",
+        loadingParts: "Carregando pecas...",
+        noCategoriesToShow: "Sem categorias para mostrar. Primeiro sincronize o catalogo.",
+        wishlistListType: "Wishlist",
+        saleListType: "Lista de venda",
+        listNamePlaceholder: "Nome da lista",
+        renameList: "Renomear lista",
+        yes: "Sim",
+        no: "Nao",
+        deleteListConfirm: "Tem certeza que deseja apagar a lista? As informacoes de todas as pecas dentro dela serao perdidas.",
+        price: "Preco",
+        itemsOfList: "Itens da lista",
+        listHasNoPartsYet: "Esta lista ainda nao tem pecas.",
+        someoneOffersThisPart: "Alguem te oferece esta peca",
+        catalog: "Catalogo",
+        noPartsToShow: "Sem pecas para mostrar.",
+        sortCode: "Codigo",
+        sortColor: "Cor",
+        sortUser: "Usuario",
+        sortPriceAsc: "$ menor para maior",
+        sortPriceDesc: "$ maior para menor",
+        masterPanel: "Painel Master",
+        createLug: "Criar LUG",
+        doubleClickAssignLug: "Duplo clique em um LUG para definir como atual.",
+        loadingPhrasesTitle: "Frases de carregamento",
+        loadingPhrasesHelp: "Edite e salve as frases. Serão aplicadas nas proximas cargas.",
+        maintenanceLockTitle: "Bloqueio de manutencao",
+        enableMaintenance: "Colocar em manutencao",
+        maintenanceLine1: "Frase linha 1",
+        maintenanceLine2: "Frase linha 2",
+        maintenanceLine1Placeholder: "Escreva a primeira linha",
+        maintenanceLine2Placeholder: "Escreva a segunda linha",
+        preview: "Pre-visualizacao",
+        switchLug: "Mudar de LUG",
+        uploadLogoMax: "Carregar imagem do logo (max 500x500)",
+        countryCity: "Pais / cidade",
+        description: "Descricao",
+        creating: "Criando...",
+        createNewLugShort: "Criar novo LUG",
+        createLugButton: "Criar LUG",
+        leaveCurrentLugOnCreate: "Se continuar, voce vai sair do seu LUG atual.",
+        leaveCurrentLugOnAccess: "Se continuar, voce vai sair do seu LUG atual.",
+        ok: "OK",
+        loadingListById: "Carregando lista...",
+        noMail: "Sem email",
+        noColor: "Sem cor",
+        noNameFallback: "Sem nome",
+        noImageCache: "Imagem sem cache",
+        notLegoColor: "(Cor nao LEGO)",
+        backToCategories: "Voltar para categorias",
+        notPrinted: "Nao impressas",
+        printed: "Impressas",
+        filterAll: "Todos",
+        filterPopular: "Popular",
+        filterOthers: "Outros",
+        maintenanceSection: "Manutencao",
+        disableMaintenance: "Sair da manutencao",
+        noMessage: "Sem mensagem",
+        reject: "Rejeitar",
+        accept: "Aceitar",
+        offerLine: (name: string, qty: number) => `${name} te oferece ${qty} pecas`,
+        existingColorPart: "peca em cor existente",
+        logo: "Logo",
+        color1: "Cor1",
+        color2: "Cor2",
+        color3: "Cor3",
+        exportUser: "Usuario",
+        exportMail: "Email",
+        exportDate: "Data",
+        exportPiece: "Peca",
+        exportQuantity: "Quantidade",
+        exportImage: "Imagem",
+        exportName: "Nome",
+        exportColor: "Cor",
+        buttonLists: "LISTAS",
+        buttonMinifig: "minifiguras",
+        buttonLugs: "LUGs",
+        detailSale: "Detalhe de venda",
+        detailWishlist: "Detalhe de wishlist",
+        quantityWord: "Quantidade",
+        publishedByWord: "Publicado por",
+        selectColor: "Selecionar cor",
+        exportPdf: "Exportar a PDF",
+        listLotsCount: "Quantidade de lotes",
+        listPiecesCount: "Quantidade de pecas",
+        footerLegendLabel: "Legenda final",
+        footerLegendPlaceholder: "Escreva o texto final",
+        footerLegendSave: "Salvar legenda",
+        minifigSectionTitle: "Minifiguras",
+        collectibleSeriesTitle: "Series colecionaveis",
+        loadingSeries: "Carregando series...",
+        noSeriesFound: "Sem series colecionaveis.",
+        selectSeriesHint: "Selecione uma serie para continuar.",
+        syncMinifigSeries: "Sincronizar series de minifiguras",
+        loadingSeriesItems: "Carregando minifiguras...",
+        noSeriesItems: "Sem minifiguras nessa serie.",
+        loadingFigureParts: "Carregando pecas...",
+        noFigureParts: "Sem pecas para esta minifigura.",
+        ownedComplete: "Completas",
+        ownedMissing: "Com faltantes",
+        ownedTotal: "Tenho",
+        ownedFavorites: "Favoritas",
+      };
+    }
+
+    return {
+      back: "Volver",
+      lists: "Listas",
+      createList: "Crear lista",
+      yourWishlists: "Tus Wishlists",
+      yourSaleLists: "Tus listas de venta",
+      noWishlistLists: "Sin listas de deseos.",
+      noSaleLists: "Sin listas de venta.",
+      renameListTitle: "Renombrar lista",
+      private: "Privado",
+      public: "Publico",
+      deleteList: "Chau lista",
+      offeredToOthers: "Piezas ofrecidas a otros",
+      offeredToMe: "Piezas que me ofrecieron",
+      print: "Print",
+      close: "Cerrar",
+      cancel: "Cancelar",
+      loading: "Cargando...",
+      noOffersRegistered: "Sin ofertas registradas.",
+      noOffersReceived: "Sin ofertas recibidas.",
+      members: "Integrantes",
+      makeAdmin: "Hacer Admin",
+      loadingMembers: "Cargando integrantes...",
+      noMembers: "No hay integrantes para mostrar.",
+      poolWishlist: "Pool de Wishlist",
+      poolSales: "Pool de Ventas",
+      noPublicWishlist: "Sin piezas publicas en wishlist.",
+      noPublicSales: "Sin piezas publicas en venta.",
+      iHave: "Yo tengo",
+      minifigPending: "Minifiguras en preparacion.",
+      userSettings: "Configuracion de usuario",
+      name: "Nombre",
+      mail: "Mail",
+      changePassword: "Cambiar contrasena",
+      hidePasswordChange: "Ocultar cambio de contrasena",
+      newPassword: "Nueva contrasena",
+      repeatPassword: "Repetir contrasena",
+      lug: "LUG",
+      socialNetwork: "Red social",
+      none: "Ninguna",
+      userPlaceholder: "usuario",
+      doubleClickSelect: "Doble clic para seleccionar",
+      save: "Guardar",
+      saving: "Guardando...",
+      lugProperties: "Propiedades del LUG",
+      lugInformation: "Informacion del LUG",
+      loadingLugInfo: "Cargando informacion del LUG...",
+      noLug: "Sin LUG",
+      noName: "Sin nombre",
+      noCountry: "Sin pais",
+      noDescription: "Sin descripcion",
+      lugsList: "Lista de LUGs",
+      mustJoinOrCreateLug: "Tenes que unirte o crear un LUG para continuar.",
+      doubleClickLugInfo: "Doble clic en un LUG para ver su informacion.",
+      loadingLugs: "Cargando LUGs...",
+      noLugsLoaded: "No hay LUGs cargados.",
+      yourLug: "Tu LUG",
+      noOtherLugs: "No hay otros LUGs para mostrar.",
+      membersSuffix: "miembros",
+      enterDirect: "Entrar directo",
+      cancelRequest: "Cancelar solicitud",
+      requestJoin: "Solicitar ingreso",
+      createNewLug: "Crear nuevo LUG",
+      requestJoinTitle: "Solicitar ingreso",
+      writeMessage: "Escribe un mensaje",
+      send: "Enviar",
+      sending: "Enviando...",
+      lugInfoTitle: "Informacion del LUG",
+      loadingInfo: "Cargando informacion...",
+      noMembersLoaded: "No hay miembros cargados.",
+      noSocial: "Sin red social",
+      noLugDetail: "No pudimos cargar el detalle del LUG.",
+      joinRequestsTitle: "Solicitudes de ingreso",
+      loadingJoinRequests: "Cargando solicitudes...",
+      noPendingRequests: "No hay solicitudes pendientes.",
+      emptyLugsTitle: "LUGs vacios",
+      loadingEmptyLugs: "Cargando LUGs vacios...",
+      noPendingEmptyLugs: "No hay LUGs vacios pendientes.",
+      deleteLug: "Borrar LUG",
+      leaveOpen: "Dejar abierto",
+      addItem: "Agregar item",
+      categories: "Categorias",
+      noImage: "Sin img",
+      searchPlaceholder: "Buscar pieza por nombre, codigo o #codigo",
+      searching: "Buscando...",
+      noResults: "Sin resultados.",
+      loadingList: "Cargando lista...",
+      loadingParts: "Cargando piezas...",
+      noCategoriesToShow: "No hay categorias para mostrar. Primero hay que sincronizar el catalogo.",
+      wishlistListType: "Lista de deseos",
+      saleListType: "Lista de venta",
+      listNamePlaceholder: "Nombre de la lista",
+      renameList: "Renombrar lista",
+      yes: "Si",
+      no: "No",
+      deleteListConfirm: "¿Estas seguro que queres borrar la lista? Se perdera la informacion de todas las piezas que esten dentro.",
+      price: "Precio",
+      itemsOfList: "Items de la lista",
+      listHasNoPartsYet: "Esta lista todavia no tiene piezas.",
+      someoneOffersThisPart: "Alguien te ofrece esta pieza",
+      catalog: "Catalogo",
+      noPartsToShow: "Sin piezas para mostrar.",
+      sortCode: "Codigo",
+      sortColor: "Color",
+      sortUser: "Usuario",
+      sortPriceAsc: "$ menor a mayor",
+      sortPriceDesc: "$ mayor a menor",
+      masterPanel: "Panel Master",
+      createLug: "Crear LUG",
+      doubleClickAssignLug: "Doble clic en un LUG para asignarlo como actual.",
+      loadingPhrasesTitle: "Frases de carga",
+      loadingPhrasesHelp: "Edita y guarda las frases. Se aplica en proximas cargas.",
+      maintenanceLockTitle: "Bloqueo de mantenimiento",
+      enableMaintenance: "Poner en mantenimiento",
+      maintenanceLine1: "Frase linea 1",
+      maintenanceLine2: "Frase linea 2",
+      maintenanceLine1Placeholder: "Escribi la primera linea",
+      maintenanceLine2Placeholder: "Escribi la segunda linea",
+      preview: "Vista previa",
+      switchLug: "Cambiar de LUG",
+      uploadLogoMax: "Cargar imagen logo (max 500x500)",
+      countryCity: "Pais / ciudad",
+      description: "Descripcion",
+      creating: "Creando...",
+      createNewLugShort: "Crear nuevo LUG",
+      createLugButton: "Crear LUG",
+      leaveCurrentLugOnCreate: "Si seguis adelante vas a abandonar tu LUG actual.",
+      leaveCurrentLugOnAccess: "Si seguis adelante vas a salir de tu LUG actual.",
+      ok: "OK",
+      loadingListById: "Cargando lista...",
+      noMail: "Sin mail",
+      noColor: "Sin color",
+      noNameFallback: "Sin nombre",
+      noImageCache: "Imagen sin cache",
+      notLegoColor: "(Color no LEGO)",
+      backToCategories: "Volver a categorias",
+      notPrinted: "No impresas",
+      printed: "Impresas",
+      filterAll: "All",
+      filterPopular: "Popular",
+      filterOthers: "Otros",
+      maintenanceSection: "Mantenimiento",
+      disableMaintenance: "Sacar de mantenimiento",
+      noMessage: "Sin mensaje",
+      reject: "Rechazar",
+      accept: "Aceptar",
+      offerLine: (name: string, qty: number) => `${name} te ofrece ${qty} piezas`,
+      existingColorPart: "pieza en color existente",
+      logo: "Logo",
+      color1: "Color1",
+      color2: "Color2",
+      color3: "Color3",
+      exportUser: "Usuario",
+      exportMail: "Mail",
+      exportDate: "Fecha",
+      exportPiece: "Pieza",
+      exportQuantity: "Cantidad",
+      exportImage: "Imagen",
+      exportName: "Nombre",
+      exportColor: "Color",
+      buttonLists: "LISTAS",
+      buttonMinifig: "minifiguras",
+      buttonLugs: "LUGs",
+      detailSale: "Detalle de Venta",
+      detailWishlist: "Detalle de Wishlist",
+      quantityWord: "Cantidad",
+      publishedByWord: "Publicado por",
+      selectColor: "Seleccionar color",
+      exportPdf: "Exportar a PDF",
+      listLotsCount: "Cantidad de lotes",
+      listPiecesCount: "Cantidad de piezas",
+      footerLegendLabel: "Leyenda final",
+      footerLegendPlaceholder: "Escribi el texto final",
+      footerLegendSave: "Guardar leyenda",
+      minifigSectionTitle: "Minifiguras",
+      collectibleSeriesTitle: "Series coleccionables",
+      loadingSeries: "Cargando series...",
+      noSeriesFound: "No hay series coleccionables.",
+      selectSeriesHint: "Selecciona una serie para continuar.",
+      syncMinifigSeries: "Sincronizar series de minifiguras",
+      loadingSeriesItems: "Cargando minifiguras...",
+      noSeriesItems: "No hay minifiguras en esta serie.",
+      loadingFigureParts: "Cargando piezas...",
+      noFigureParts: "No hay piezas para esta minifigura.",
+      ownedComplete: "Completas",
+      ownedMissing: "Con faltantes",
+      ownedTotal: "Tengo",
+      ownedFavorites: "Favoritas",
+    };
+  }, [language]);
+
   const submitText = mode === "register" ? t.createAccount : t.signIn;
+  const buildListStatsLabel = useCallback(
+    (lotes: number, piezas: number) => {
+      if (language === "en") {
+        return `Lots: ${lotes} - Pieces: ${piezas}`;
+      }
+      if (language === "pt") {
+        return `Lotes: ${lotes} - Pecas: ${piezas}`;
+      }
+      return `Lotes: ${lotes} - Piezas: ${piezas}`;
+    },
+    [language],
+  );
+  const statusText = useMemo(() => {
+    if (language === "en") {
+      return {
+        loadingPhrasesSaved: "Loading phrases saved.",
+        maintenanceEnabled: "Maintenance enabled.",
+        maintenanceDisabled: "Maintenance disabled.",
+        listNameRequired: "List name is required.",
+        noDataToExport: "No data to export.",
+        printWindowFailed: "Could not open export window for PDF.",
+        listOpenFailed: "Could not open that list.",
+        missingPriceMigration: "Missing DB migration for price (0029_add_value_to_list_items.sql).",
+        selectPartFirst: "Select a part first.",
+        validSalePrice: "Enter a valid price for sale list.",
+        noListSelectedForExport: "No list selected for export.",
+        noPartsToExport: "No parts to export.",
+        cannotOfferOwnWishlist: "You cannot offer on your own wishlist.",
+        offerSent: "Offer sent.",
+        itemDeleted: "Item deleted.",
+        validPrice: "Enter a valid price.",
+        dbMissingPriceColumn: "Database still has no price column. Apply the price migration.",
+        priceUpdated: "Price updated.",
+        passwordMinLength: "New password must be at least 6 characters.",
+        passwordsMismatch: "Passwords do not match.",
+        settingsSaved: "Settings saved.",
+        lugNameRequired: "LUG name is required.",
+        lugAssigned: "LUG assigned to user.",
+        userHasNoLug: "This user has no assigned LUG.",
+        onlyAdminCanEditLug: "Only a LUG admin can edit this information.",
+        lugInfoUpdated: "LUG information updated.",
+        lugMemberCountFailed: "Could not calculate member count per LUG.",
+        footerLegendSaved: "Footer legend saved.",
+        footerLegendMigrationMissing: "Missing DB migration for footer legend (0031_add_footer_legend_to_app_maintenance.sql).",
+        minifigSeriesSynced: "Minifigure series synced.",
+      };
+    }
+
+    if (language === "pt") {
+      return {
+        loadingPhrasesSaved: "Frases de carregamento salvas.",
+        maintenanceEnabled: "Manutencao ativada.",
+        maintenanceDisabled: "Manutencao desativada.",
+        listNameRequired: "O nome da lista e obrigatorio.",
+        noDataToExport: "Sem dados para exportar.",
+        printWindowFailed: "Nao foi possivel abrir a janela para exportar PDF.",
+        listOpenFailed: "Nao foi possivel abrir essa lista.",
+        missingPriceMigration: "Falta migracao de DB para preco (0029_add_value_to_list_items.sql).",
+        selectPartFirst: "Selecione uma peca primeiro.",
+        validSalePrice: "Informe um preco valido para a lista de venda.",
+        noListSelectedForExport: "Nenhuma lista selecionada para exportar.",
+        noPartsToExport: "Sem pecas para exportar.",
+        cannotOfferOwnWishlist: "Voce nao pode oferecer na sua propria wishlist.",
+        offerSent: "Oferta enviada.",
+        itemDeleted: "Item removido.",
+        validPrice: "Informe um preco valido.",
+        dbMissingPriceColumn: "A base ainda nao tem coluna de preco. Aplique a migracao de precos.",
+        priceUpdated: "Preco atualizado.",
+        passwordMinLength: "A nova senha deve ter pelo menos 6 caracteres.",
+        passwordsMismatch: "As senhas nao coincidem.",
+        settingsSaved: "Configuracoes salvas.",
+        lugNameRequired: "O nome do LUG e obrigatorio.",
+        lugAssigned: "LUG atribuido ao usuario.",
+        userHasNoLug: "Este usuario nao tem LUG atribuido.",
+        onlyAdminCanEditLug: "Somente um admin do LUG pode editar estas informacoes.",
+        lugInfoUpdated: "Informacoes do LUG atualizadas.",
+        lugMemberCountFailed: "Nao foi possivel calcular a quantidade de membros por LUG.",
+        footerLegendSaved: "Legenda final salva.",
+        footerLegendMigrationMissing: "Falta migracao de DB para legenda final (0031_add_footer_legend_to_app_maintenance.sql).",
+        minifigSeriesSynced: "Series de minifiguras sincronizadas.",
+      };
+    }
+
+    return {
+      loadingPhrasesSaved: "Frases de carga guardadas.",
+      maintenanceEnabled: "Mantenimiento activado.",
+      maintenanceDisabled: "Mantenimiento desactivado.",
+      listNameRequired: "El nombre de la lista es obligatorio.",
+      noDataToExport: "No hay datos para exportar.",
+      printWindowFailed: "No se pudo abrir la ventana para exportar PDF.",
+      listOpenFailed: "No pudimos abrir esa lista.",
+      missingPriceMigration: "Falta migracion de DB para precio (0029_add_value_to_list_items.sql).",
+      selectPartFirst: "Selecciona una pieza primero.",
+      validSalePrice: "Ingresa un precio valido para la lista de venta.",
+      noListSelectedForExport: "No hay lista seleccionada para exportar.",
+      noPartsToExport: "No hay piezas para exportar.",
+      cannotOfferOwnWishlist: "No podes ofrecer en tu propia wishlist.",
+      offerSent: "Oferta enviada.",
+      itemDeleted: "Item eliminado.",
+      validPrice: "Ingresa un precio valido.",
+      dbMissingPriceColumn: "La base todavia no tiene columna de precio. Aplica la migracion de precios.",
+      priceUpdated: "Precio actualizado.",
+      passwordMinLength: "La nueva contrasena debe tener al menos 6 caracteres.",
+      passwordsMismatch: "Las contrasenas no coinciden.",
+      settingsSaved: "Configuracion guardada.",
+      lugNameRequired: "El nombre del LUG es obligatorio.",
+      lugAssigned: "LUG asignado al usuario.",
+      userHasNoLug: "Este usuario no tiene LUG asignado.",
+      onlyAdminCanEditLug: "Solo un admin del LUG puede editar esta informacion.",
+      lugInfoUpdated: "Informacion del LUG actualizada.",
+      lugMemberCountFailed: "No pudimos calcular la cantidad de miembros por LUG.",
+      footerLegendSaved: "Leyenda final guardada.",
+      footerLegendMigrationMissing: "Falta migracion de DB para leyenda final (0031_add_footer_legend_to_app_maintenance.sql).",
+      minifigSeriesSynced: "Series de minifiguras sincronizadas.",
+    };
+  }, [language]);
   const currentUserLug = useMemo(
     () => masterLugs.find((lug) => lug.lug_id === currentLugId) ?? null,
     [masterLugs, currentLugId],
   );
+  const activeLanguageIcon = useMemo(() => {
+    if (language === "en") return "EN";
+    if (language === "pt") return "PT";
+    return "ES";
+  }, [language]);
+  const mustSelectLugOnDashboard = Boolean(userId && activeSection === "dashboard" && !currentLugId);
   const otherLugs = useMemo(
     () => masterLugs.filter((lug) => lug.lug_id !== currentLugId),
     [masterLugs, currentLugId],
@@ -487,6 +1303,28 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const uiColor1 = currentLugColor1 || "#006eb2";
   const uiColor3 = currentLugColor3 || "#111111";
   const uiColor1Text = getContrastTextColor(uiColor1);
+  const currentLugDisplayName = miLugHeaderName || lugInfoData?.nombre || currentUserLug?.nombre || "Mi LUG";
+  const miLugPoolPageSize = 18;
+
+  const fetchProfileNamesByIds = useCallback(async (ids: string[]) => {
+    const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
+    if (cleanIds.length === 0) {
+      return new Map<string, string>();
+    }
+
+    try {
+      const response = await fetch("/api/profiles/names", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: cleanIds }),
+      });
+      const json = (await response.json()) as { names?: Record<string, string> };
+      const names = json.names ?? {};
+      return new Map(Object.entries(names).map(([id, fullName]) => [String(id), String(fullName).trim()]));
+    } catch {
+      return new Map<string, string>();
+    }
+  }, []);
   const panelFilteredParts = useMemo(() => {
     const looksPrinted = (part: PartCatalogItem) => {
       if (typeof part.is_printed === "boolean") {
@@ -518,6 +1356,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     () => partsSearchResults.find((part) => part.part_num === selectedSearchPartNum) ?? null,
     [partsSearchResults, selectedSearchPartNum],
   );
+  const listItemsPageSize = 20;
+  const listItemsMaxPage = useMemo(() => Math.max(1, Math.ceil(listItemsRows.length / listItemsPageSize)), [listItemsRows.length]);
+  const listItemsCurrentPage = useMemo(() => Math.min(listItemsPage, listItemsMaxPage), [listItemsMaxPage, listItemsPage]);
+  const listItemsVisibleRows = useMemo(() => {
+    const from = Math.max(0, (listItemsCurrentPage - 1) * listItemsPageSize);
+    return listItemsRows.slice(from, from + listItemsPageSize);
+  }, [listItemsCurrentPage, listItemsRows]);
   const colorOptions = useMemo(() => {
     return goBrickColors
       .map((color) => {
@@ -548,6 +1393,15 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     () => visibleColorOptions.find((option) => option.label === addItemColorNameInput)?.hex ?? null,
     [visibleColorOptions, addItemColorNameInput],
   );
+  const addItemColorDisplayLabel = useMemo(() => {
+    if (!addItemColorNameInput) {
+      return labels.selectColor;
+    }
+    if (addItemColorNameInput === NO_COLOR_LABEL) {
+      return labels.noColor;
+    }
+    return addItemColorNameInput;
+  }, [addItemColorNameInput, labels.noColor, labels.selectColor]);
   const colorHexByLabel = useMemo(() => {
     const map = new Map<string, string>();
     goBrickColors.forEach((color) => {
@@ -563,6 +1417,53 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
     return map;
   }, [goBrickColors]);
+  const miLugWishlistSortedItems = useMemo(() => {
+    const rows = [...miLugPoolWishlistItems];
+    rows.sort((a, b) => {
+      if (miLugWishlistSort === "color") {
+        return String(a.color_label ?? "").localeCompare(String(b.color_label ?? ""));
+      }
+      if (miLugWishlistSort === "usuario") {
+        return a.publisher_name.localeCompare(b.publisher_name);
+      }
+      return a.part_num.localeCompare(b.part_num);
+    });
+    return rows;
+  }, [miLugPoolWishlistItems, miLugWishlistSort]);
+  const miLugSaleSortedItems = useMemo(() => {
+    const rows = [...miLugPoolSaleItems];
+    rows.sort((a, b) => {
+      if (miLugSaleSort === "color") {
+        return String(a.color_label ?? "").localeCompare(String(b.color_label ?? ""));
+      }
+      if (miLugSaleSort === "usuario") {
+        return a.publisher_name.localeCompare(b.publisher_name);
+      }
+      if (miLugSaleSort === "price_asc") {
+        return (a.value ?? Number.POSITIVE_INFINITY) - (b.value ?? Number.POSITIVE_INFINITY);
+      }
+      if (miLugSaleSort === "price_desc") {
+        return (b.value ?? Number.NEGATIVE_INFINITY) - (a.value ?? Number.NEGATIVE_INFINITY);
+      }
+      return a.part_num.localeCompare(b.part_num);
+    });
+    return rows;
+  }, [miLugPoolSaleItems, miLugSaleSort]);
+  const miLugWishlistMaxPage = useMemo(
+    () => Math.max(1, Math.ceil(miLugWishlistSortedItems.length / miLugPoolPageSize)),
+    [miLugWishlistSortedItems.length],
+  );
+  const miLugSaleMaxPage = useMemo(() => Math.max(1, Math.ceil(miLugSaleSortedItems.length / miLugPoolPageSize)), [miLugSaleSortedItems.length]);
+  const miLugWishlistCurrentPage = useMemo(() => Math.min(miLugWishlistPage, miLugWishlistMaxPage), [miLugWishlistMaxPage, miLugWishlistPage]);
+  const miLugSaleCurrentPage = useMemo(() => Math.min(miLugSalePage, miLugSaleMaxPage), [miLugSaleMaxPage, miLugSalePage]);
+  const miLugWishlistVisibleItems = useMemo(() => {
+    const from = Math.max(0, (miLugWishlistCurrentPage - 1) * miLugPoolPageSize);
+    return miLugWishlistSortedItems.slice(from, from + miLugPoolPageSize);
+  }, [miLugWishlistCurrentPage, miLugWishlistSortedItems]);
+  const miLugSaleVisibleItems = useMemo(() => {
+    const from = Math.max(0, (miLugSaleCurrentPage - 1) * miLugPoolPageSize);
+    return miLugSaleSortedItems.slice(from, from + miLugPoolPageSize);
+  }, [miLugSaleCurrentPage, miLugSaleSortedItems]);
   const useColoredPreview = Boolean(
     selectedSearchPart?.part_num && addItemColorNameInput.trim() && addItemColorNameInput !== NO_COLOR_LABEL,
   );
@@ -589,7 +1490,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     listasLoading ||
     listasSaving ||
     listItemsLoading ||
-    panelPartsLoading;
+    panelPartsLoading ||
+    miLugPoolsLoading;
 
   useEffect(() => {
     if (!showColorDropdown && !showPartSearchDropdown) {
@@ -656,7 +1558,6 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const raw = partsSearchQuery.trim();
     const normalized = raw.startsWith("#") ? raw.slice(1).trim() : raw;
     const normalizedForMatch = normalizeDimensionText(normalized);
-    const tokens = extractSearchTokens(normalizedForMatch);
 
     if (normalizedForMatch.length < 3) {
       setPartsSearchResults(selectedSearchPart ? [selectedSearchPart] : []);
@@ -676,68 +1577,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const timeoutId = window.setTimeout(async () => {
       setPartsSearchLoading(true);
       try {
-        const phraseVariants = buildSearchVariants(normalized);
-        const tokenVariants = Array.from(new Set(tokens.flatMap((token) => buildSearchVariants(token))));
-        const variants = Array.from(new Set([...phraseVariants, ...tokenVariants]));
-        const responses = await Promise.all(
-          variants.map(async (variant) => {
-            const candidatePages = [1, 2, 3, 4];
-            const chunks = await Promise.all(candidatePages.map(async (pageNum) => {
-              const params = new URLSearchParams({
-                local_only: "1",
-                page: String(pageNum),
-                page_size: "250",
-                q: variant,
-              });
-              const response = await fetch(`/api/rebrickable/parts?${params.toString()}`);
-              const json = (await response.json()) as { results?: PartCatalogItem[] };
-              return Array.isArray(json.results) ? json.results : [];
-            }));
-
-            const byPartNum = new Map<string, PartCatalogItem>();
-            chunks.flat().forEach((part) => {
-              byPartNum.set(part.part_num, part);
-            });
-
-            return Array.from(byPartNum.values())
-              .sort((a, b) => {
-                if (a.name.length !== b.name.length) {
-                  return a.name.length - b.name.length;
-                }
-                return a.name.localeCompare(b.name);
-              })
-              .slice(0, 500);
-          }),
-        );
+        const params = new URLSearchParams({ q: normalized, limit: "20" });
+        const response = await fetch(`/api/parts/search?${params.toString()}`);
+        const json = (await response.json()) as { results?: PartCatalogItem[] };
         if (cancelled) {
           return;
         }
 
-        const byPartNum = new Map<string, PartCatalogItem>();
-        responses.flat().forEach((part) => {
-          byPartNum.set(part.part_num, part);
-        });
-
-        const tokenFiltered = Array.from(byPartNum.values()).filter((part) => {
-          const searchText = normalizeDimensionText(`${part.part_num} ${part.name}`);
-          return tokens.every((token) => tokenMatchesSearchText(searchText, token));
-        });
-
-        const ranked = tokenFiltered
-          .sort((a, b) => {
-            const scoreDiff = scoreSearchResult(b, normalizedForMatch, tokens) - scoreSearchResult(a, normalizedForMatch, tokens);
-            if (scoreDiff !== 0) {
-              return scoreDiff;
-            }
-            if (a.name.length !== b.name.length) {
-              return a.name.length - b.name.length;
-            }
-            return a.part_num.localeCompare(b.part_num);
-          })
-          .slice(0, 20);
-
-        setPartsSearchResults(ranked);
-        setShowPartSearchDropdown(ranked.length > 0);
+        const rows = Array.isArray(json.results) ? json.results : [];
+        setPartsSearchResults(rows);
+        setShowPartSearchDropdown(rows.length > 0);
       } catch {
         if (!cancelled) {
           setPartsSearchResults([]);
@@ -922,7 +1771,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       window.localStorage.setItem("loading_phrases_v1", JSON.stringify(normalized));
     }
 
-    setStatus("Frases de carga guardadas.");
+    setStatus(statusText.loadingPhrasesSaved);
     setShowLoadingPhrasesPanel(false);
   }
 
@@ -931,11 +1780,22 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return;
     }
 
-    const { data, error } = await supabase
+    const maintenanceWithFooter = await supabase
       .from("app_maintenance")
-      .select("enabled, message_line1, message_line2")
+      .select("enabled, message_line1, message_line2, footer_legend")
       .eq("id", 1)
       .maybeSingle();
+
+    const maintenanceResult = maintenanceWithFooter.error
+      ? await supabase
+          .from("app_maintenance")
+          .select("enabled, message_line1, message_line2")
+          .eq("id", 1)
+          .maybeSingle()
+      : maintenanceWithFooter;
+
+    const data = maintenanceResult.data;
+    const error = maintenanceResult.error;
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -945,11 +1805,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMaintenanceEnabled(Boolean(data?.enabled));
     setMaintenanceMessageLine1(String(data?.message_line1 ?? "Estamos en mantenimiento"));
     setMaintenanceMessageLine2(String(data?.message_line2 ?? "Volvé en un rato"));
+    setFooterLegend(String((data as { footer_legend?: unknown } | null)?.footer_legend ?? "LUGs App"));
   }, [supabase, t.errorPrefix]);
 
   function openMaintenancePanel() {
     setMaintenanceDraftMessageLine1(maintenanceMessageLine1 || "");
     setMaintenanceDraftMessageLine2(maintenanceMessageLine2 || "");
+    setMaintenanceDraftFooterLegend(footerLegend || "");
     setShowMaintenancePanel(true);
   }
 
@@ -961,14 +1823,35 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const nextLine1 = maintenanceDraftMessageLine1.trim() || "Estamos en mantenimiento";
     const nextLine2 = maintenanceDraftMessageLine2.trim() || "Volvé en un rato";
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from("app_maintenance")
       .update({
         enabled: true,
         message_line1: nextLine1,
         message_line2: nextLine2,
+        footer_legend: maintenanceDraftFooterLegend.trim() || footerLegend || "LUGs App",
       })
       .eq("id", 1);
+
+    if (
+      error &&
+      (/column\s+"?footer_legend"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'footer_legend' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      const fallback = await supabase
+        .from("app_maintenance")
+        .update({
+          enabled: true,
+          message_line1: nextLine1,
+          message_line2: nextLine2,
+        })
+        .eq("id", 1);
+      error = fallback.error;
+      if (!fallback.error) {
+        setStatus(statusText.footerLegendMigrationMissing);
+      }
+    }
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -978,8 +1861,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMaintenanceEnabled(true);
     setMaintenanceMessageLine1(nextLine1);
     setMaintenanceMessageLine2(nextLine2);
+    setFooterLegend(maintenanceDraftFooterLegend.trim() || footerLegend || "LUGs App");
     setShowMaintenancePanel(false);
-    setStatus("Mantenimiento activado.");
+    setStatus(statusText.maintenanceEnabled);
   }
 
   async function disableMaintenanceMode() {
@@ -987,14 +1871,32 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return;
     }
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from("app_maintenance")
       .update({
         enabled: false,
         message_line1: maintenanceMessageLine1,
         message_line2: maintenanceMessageLine2,
+        footer_legend: footerLegend,
       })
       .eq("id", 1);
+
+    if (
+      error &&
+      (/column\s+"?footer_legend"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'footer_legend' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      const fallback = await supabase
+        .from("app_maintenance")
+        .update({
+          enabled: false,
+          message_line1: maintenanceMessageLine1,
+          message_line2: maintenanceMessageLine2,
+        })
+        .eq("id", 1);
+      error = fallback.error;
+    }
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -1002,7 +1904,34 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     setMaintenanceEnabled(false);
-    setStatus("Mantenimiento desactivado.");
+    setStatus(statusText.maintenanceDisabled);
+  }
+
+  async function saveFooterLegendInMaster() {
+    if (!supabase) {
+      return;
+    }
+
+    const nextLegend = maintenanceDraftFooterLegend.trim() || "LUGs App";
+    const { error } = await supabase.from("app_maintenance").update({ footer_legend: nextLegend }).eq("id", 1);
+
+    if (
+      error &&
+      (/column\s+"?footer_legend"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'footer_legend' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      setStatus(statusText.footerLegendMigrationMissing);
+      return;
+    }
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setFooterLegend(nextLegend);
+    setStatus(statusText.footerLegendSaved);
   }
 
   const loadListasFromDb = useCallback(async () => {
@@ -1052,7 +1981,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     const nombre = newListaNombre.trim();
     if (!nombre) {
-      setStatus("El nombre de la lista es obligatorio.");
+      setStatus(statusText.listNameRequired);
       return;
     }
 
@@ -1165,6 +2094,666 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     await Promise.all([loadListasFromDb(), loadPartsCategories()]);
   }, [loadListasFromDb, loadPartsCategories, router]);
 
+  const loadCollectibleSeries = useCallback(async () => {
+    setMinifigSeriesLoading(true);
+
+    try {
+      const response = await fetch("/api/rebrickable/minifigures/themes", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        error?: string;
+        results?: Array<CollectibleSeriesItem>;
+      };
+
+      if (!response.ok) {
+        setStatus(payload.error || `${t.errorPrefix}: collectible series`);
+        setMinifigSeriesRows([]);
+        setMinifigSeriesLoading(false);
+        return;
+      }
+
+      const rows = Array.isArray(payload.results)
+        ? payload.results
+            .map((row) => ({
+              id: Number(row.id ?? 0),
+              name: String(row.name ?? ""),
+              year_from: row.year_from == null ? null : Number(row.year_from),
+              year_to: row.year_to == null ? null : Number(row.year_to),
+              set_count: Number(row.set_count ?? 0),
+            }))
+            .filter((row) => row.id > 0 && row.name)
+          : [];
+
+      setMinifigSeriesRows(rows);
+
+      if (supabase && userId && rows.length > 0) {
+        const themeIds = Array.from(new Set(rows.map((row) => row.id)));
+        const { data: prefRows, error: prefError } = await supabase
+          .from("minifig_user_series_preferences")
+          .select("theme_id, is_selected, is_favorite")
+          .eq("user_id", userId)
+          .in("theme_id", themeIds);
+
+        if (!prefError) {
+          const checkedMap: Record<number, boolean> = {};
+          const favoriteMap: Record<number, boolean> = {};
+          for (const row of prefRows ?? []) {
+            const themeId = Number((row as { theme_id?: unknown }).theme_id ?? 0);
+            if (!themeId) continue;
+            checkedMap[themeId] = Boolean((row as { is_selected?: unknown }).is_selected);
+            favoriteMap[themeId] = Boolean((row as { is_favorite?: unknown }).is_favorite);
+          }
+          setMinifigSeriesCheckedById((prev) => ({ ...prev, ...checkedMap }));
+          setMinifigSeriesFavoriteById((prev) => ({ ...prev, ...favoriteMap }));
+        }
+      }
+
+      setMinifigSeriesLoading(false);
+    } catch (error) {
+      setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
+      setMinifigSeriesRows([]);
+      setMinifigSeriesLoading(false);
+    }
+  }, [supabase, t.errorPrefix, userId]);
+
+  const checkedMinifigSeriesIds = useMemo(
+    () => Object.entries(minifigSeriesCheckedById).filter(([, checked]) => checked).map(([id]) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+    [minifigSeriesCheckedById],
+  );
+
+  const loadMinifigSearchResults = useCallback(
+    async (rawQuery: string) => {
+      const query = rawQuery.trim();
+      if (!supabase || !query) {
+        setMinifigSearchResults([]);
+        setMinifigSearchLoading(false);
+        return;
+      }
+
+      setMinifigSearchLoading(true);
+
+      const { data, error } = await supabase
+        .from("minifigure_sets_catalog")
+        .select("set_num, name, set_img_url, num_parts, year, theme_id")
+        .or(`name.ilike.%${query}%,set_num.ilike.%${query}%`)
+        .order("name", { ascending: true })
+        .limit(400);
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        setMinifigSearchResults([]);
+        setMinifigSearchLoading(false);
+        return;
+      }
+
+      const rows = (data ?? [])
+        .map((row) => ({
+          set_num: String(row.set_num ?? ""),
+          name: String(row.name ?? ""),
+          set_img_url: row.set_img_url ? String(row.set_img_url) : null,
+          num_parts: Number(row.num_parts ?? 0),
+          year: row.year == null ? null : Number(row.year),
+          theme_id: row.theme_id == null ? null : Number(row.theme_id),
+        }))
+        .filter((row) => row.set_num && row.name);
+
+      setMinifigSearchResults(rows);
+
+      if (userId && rows.length > 0) {
+        const setNums = Array.from(new Set(rows.map((row) => row.set_num)));
+        const [{ data: inventoryData }, { data: partInventoryData }] = await Promise.all([
+          supabase.from("minifig_user_inventory").select("set_num, is_owned, is_favorite").eq("user_id", userId).in("set_num", setNums),
+          supabase.from("minifig_user_part_inventory").select("set_num, owned_quantity").eq("user_id", userId).in("set_num", setNums),
+        ]);
+
+        const ownedMap: Record<string, boolean> = {};
+        const favoriteMap: Record<string, boolean> = {};
+        const missingPartsMap: Record<string, boolean> = {};
+        for (const row of inventoryData ?? []) {
+          const setNum = String((row as { set_num?: unknown }).set_num ?? "");
+          ownedMap[setNum] = Boolean((row as { is_owned?: unknown }).is_owned);
+          favoriteMap[setNum] = Boolean((row as { is_favorite?: unknown }).is_favorite);
+        }
+        for (const row of partInventoryData ?? []) {
+          const setNum = String((row as { set_num?: unknown }).set_num ?? "");
+          const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+          if (ownedQty <= 0) {
+            missingPartsMap[setNum] = true;
+          } else if (missingPartsMap[setNum] == null) {
+            missingPartsMap[setNum] = false;
+          }
+        }
+        setMinifigFigureCheckedBySetNum((prev) => ({ ...prev, ...ownedMap }));
+        setMinifigFigureFavoriteBySetNum((prev) => ({ ...prev, ...favoriteMap }));
+        setMinifigSetHasMissingPartsBySetNum((prev) => ({ ...prev, ...missingPartsMap }));
+      }
+
+      setMinifigSearchLoading(false);
+    },
+    [supabase, t.errorPrefix, userId],
+  );
+
+  const loadMinifigGlobalOwnedStats = useCallback(async () => {
+    if (!supabase || !userId) {
+      setMinifigGlobalOwnedStats({ complete: 0, missing: 0, total: 0, favorites: 0 });
+      return;
+    }
+
+    const { data: inventoryRows, error: inventoryError } = await supabase
+      .from("minifig_user_inventory")
+      .select("set_num, is_owned, is_favorite")
+      .eq("user_id", userId);
+
+    if (inventoryError) {
+      setStatus(`${t.errorPrefix}: ${inventoryError.message}`);
+      return;
+    }
+
+    const favorites = (inventoryRows ?? []).reduce(
+      (acc, row) => (Boolean((row as { is_favorite?: unknown }).is_favorite) ? acc + 1 : acc),
+      0,
+    );
+
+    const ownedSetNums = Array.from(
+      new Set(
+        (inventoryRows ?? [])
+          .filter((row) => Boolean((row as { is_owned?: unknown }).is_owned))
+          .map((row) => String((row as { set_num?: unknown }).set_num ?? ""))
+          .filter(Boolean),
+      ),
+    );
+    if (ownedSetNums.length === 0) {
+      setMinifigGlobalOwnedStats({ complete: 0, missing: 0, total: 0, favorites });
+      return;
+    }
+
+    const { data: partRows, error: partsError } = await supabase
+      .from("minifig_user_part_inventory")
+      .select("set_num, owned_quantity")
+      .eq("user_id", userId)
+      .in("set_num", ownedSetNums);
+
+    if (partsError) {
+      setStatus(`${t.errorPrefix}: ${partsError.message}`);
+      return;
+    }
+
+    const missingSetNums = new Set<string>();
+    for (const row of partRows ?? []) {
+      const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+      if (ownedQty <= 0) {
+        missingSetNums.add(String((row as { set_num?: unknown }).set_num ?? ""));
+      }
+    }
+
+    const total = ownedSetNums.length;
+    const missing = missingSetNums.size;
+    const complete = Math.max(0, total - missing);
+    setMinifigGlobalOwnedStats({ complete, missing, total, favorites });
+  }, [supabase, t.errorPrefix, userId]);
+
+  const saveMinifigUiPreferences = useCallback(
+    async (patch: { show_only_favorite_series?: boolean; show_only_favorite_figures?: boolean }) => {
+      if (!supabase || !userId) {
+        return;
+      }
+
+      const payload = {
+        user_id: userId,
+        show_only_favorite_series: patch.show_only_favorite_series ?? showOnlyFavoriteSeries,
+        show_only_favorite_figures: patch.show_only_favorite_figures ?? showOnlyFavoriteFigures,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("minifig_user_ui_preferences").upsert(payload, { onConflict: "user_id" });
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+      }
+    },
+    [showOnlyFavoriteFigures, showOnlyFavoriteSeries, supabase, t.errorPrefix, userId],
+  );
+
+  const saveMinifigSeriesPreference = useCallback(
+    async (themeId: number, patch: { is_selected?: boolean; is_favorite?: boolean }) => {
+      if (!supabase || !userId || !themeId) {
+        return;
+      }
+
+      const payload = {
+        user_id: userId,
+        theme_id: themeId,
+        is_selected: patch.is_selected ?? Boolean(minifigSeriesCheckedById[themeId]),
+        is_favorite: patch.is_favorite ?? Boolean(minifigSeriesFavoriteById[themeId]),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("minifig_user_series_preferences").upsert(payload, { onConflict: "user_id,theme_id" });
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+      }
+    },
+    [minifigSeriesCheckedById, minifigSeriesFavoriteById, supabase, t.errorPrefix, userId],
+  );
+
+  const loadMissingPartsPreviewForSet = useCallback(
+    async (setNum: string) => {
+      if (!supabase || !userId || !setNum) {
+        return;
+      }
+
+      if (minifigMissingPartsPreviewLoadingBySetNum[setNum] || minifigMissingPartsPreviewBySetNum[setNum]) {
+        return;
+      }
+
+      setMinifigMissingPartsPreviewLoadingBySetNum((prev) => ({ ...prev, [setNum]: true }));
+
+      try {
+        const encodedSetNum = encodeURIComponent(setNum);
+        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store" });
+        const payload = (await response.json()) as {
+          error?: string;
+          results?: Array<MinifigFigurePartItem>;
+        };
+
+        if (!response.ok) {
+          setStatus(payload.error || `${t.errorPrefix}: minifigure parts`);
+          setMinifigMissingPartsPreviewLoadingBySetNum((prev) => ({ ...prev, [setNum]: false }));
+          return;
+        }
+
+        const rows = Array.isArray(payload.results)
+          ? payload.results
+              .map((row) => ({
+                row_id: "",
+                part_num: String(row.part_num ?? ""),
+                part_name: String(row.part_name ?? ""),
+                color_name: String(row.color_name ?? ""),
+                part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+                quantity: Math.max(1, Number(row.quantity ?? 1)),
+              }))
+              .filter((row) => row.part_num)
+          : [];
+
+        const { data: partInventoryData, error: partInventoryError } = await supabase
+          .from("minifig_user_part_inventory")
+          .select("part_num, color_name, owned_quantity")
+          .eq("user_id", userId)
+          .eq("set_num", setNum);
+
+        if (partInventoryError) {
+          setStatus(`${t.errorPrefix}: ${partInventoryError.message}`);
+          setMinifigMissingPartsPreviewLoadingBySetNum((prev) => ({ ...prev, [setNum]: false }));
+          return;
+        }
+
+        const ownedByKey = new Map<string, number>();
+        for (const row of partInventoryData ?? []) {
+          const partNum = String((row as { part_num?: unknown }).part_num ?? "");
+          const colorName = String((row as { color_name?: unknown }).color_name ?? "");
+          const qty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+          ownedByKey.set(`${partNum}::${colorName}`, qty);
+        }
+
+        const missingRows = rows.flatMap((row) => {
+          const key = `${row.part_num}::${row.color_name}`;
+          const ownedQty = ownedByKey.get(key) ?? row.quantity;
+          const missingQty = Math.max(0, row.quantity - ownedQty);
+          return Array.from({ length: missingQty }, (_, index) => ({
+            ...row,
+            row_id: `${setNum}::${row.part_num}::${row.color_name}::${index}`,
+            quantity: 1,
+          }));
+        });
+
+        setMinifigMissingPartsPreviewBySetNum((prev) => ({
+          ...prev,
+          [setNum]: missingRows,
+        }));
+      } catch (error) {
+        setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
+      } finally {
+        setMinifigMissingPartsPreviewLoadingBySetNum((prev) => ({ ...prev, [setNum]: false }));
+      }
+    },
+    [minifigMissingPartsPreviewBySetNum, minifigMissingPartsPreviewLoadingBySetNum, supabase, t.errorPrefix, userId],
+  );
+
+  const loadMinifigFiguresForSeries = useCallback(
+    async (seriesId: number) => {
+      if (minifigFiguresLoadingBySeriesId[seriesId]) {
+        return;
+      }
+
+      setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: true }));
+      try {
+        const response = await fetch(`/api/rebrickable/minifigures/themes/${seriesId}/figures`, { cache: "no-store" });
+        const payload = (await response.json()) as {
+          error?: string;
+          results?: Array<MinifigFigureItem>;
+        };
+
+        if (!response.ok) {
+          setStatus(payload.error || `${t.errorPrefix}: minifigure figures`);
+          setMinifigFiguresBySeriesId((prev) => ({ ...prev, [seriesId]: [] }));
+          setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: false }));
+          return;
+        }
+
+        const rows = Array.isArray(payload.results)
+          ? payload.results
+              .map((row) => ({
+                set_num: String(row.set_num ?? ""),
+                name: String(row.name ?? ""),
+                set_img_url: row.set_img_url ? String(row.set_img_url) : null,
+                num_parts: Number(row.num_parts ?? 0),
+                year: row.year == null ? null : Number(row.year),
+                theme_id: row.theme_id == null ? null : Number(row.theme_id),
+              }))
+              .filter((row) => row.set_num && row.name)
+          : [];
+
+        setMinifigFiguresBySeriesId((prev) => ({ ...prev, [seriesId]: rows }));
+
+        if (supabase && userId && rows.length > 0) {
+          const setNums = Array.from(new Set(rows.map((row) => row.set_num)));
+          const { data: inventoryData } = await supabase
+            .from("minifig_user_inventory")
+            .select("set_num, is_owned, is_favorite")
+            .eq("user_id", userId)
+            .in("set_num", setNums);
+
+          const { data: partInventoryData } = await supabase
+            .from("minifig_user_part_inventory")
+            .select("set_num, owned_quantity")
+            .eq("user_id", userId)
+            .in("set_num", setNums);
+
+          const ownedMap: Record<string, boolean> = {};
+          const favoriteMap: Record<string, boolean> = {};
+          const missingPartsMap: Record<string, boolean> = {};
+          for (const row of inventoryData ?? []) {
+            const setNum = String((row as { set_num?: unknown }).set_num ?? "");
+            ownedMap[setNum] = Boolean((row as { is_owned?: unknown }).is_owned);
+            favoriteMap[setNum] = Boolean((row as { is_favorite?: unknown }).is_favorite);
+          }
+          for (const row of partInventoryData ?? []) {
+            const setNum = String((row as { set_num?: unknown }).set_num ?? "");
+            const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+            if (ownedQty <= 0) {
+              missingPartsMap[setNum] = true;
+            } else if (missingPartsMap[setNum] == null) {
+              missingPartsMap[setNum] = false;
+            }
+          }
+          setMinifigFigureCheckedBySetNum((prev) => ({ ...prev, ...ownedMap }));
+          setMinifigFigureFavoriteBySetNum((prev) => ({ ...prev, ...favoriteMap }));
+          setMinifigSetHasMissingPartsBySetNum((prev) => ({ ...prev, ...missingPartsMap }));
+
+          const missingSetNums = setNums.filter((setNum) => Boolean(missingPartsMap[setNum]));
+          if (missingSetNums.length > 0) {
+            for (const setNum of missingSetNums) {
+              void loadMissingPartsPreviewForSet(setNum);
+            }
+          }
+        }
+
+        setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: false }));
+      } catch (error) {
+        setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
+        setMinifigFiguresBySeriesId((prev) => ({ ...prev, [seriesId]: [] }));
+        setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: false }));
+      }
+    },
+    [loadMissingPartsPreviewForSet, minifigFiguresLoadingBySeriesId, supabase, t.errorPrefix, userId],
+  );
+
+  const saveMinifigSetOwnedState = useCallback(
+    async (setNum: string, isOwned: boolean) => {
+      if (!supabase || !userId) {
+        return;
+      }
+
+      const { error } = await supabase.from("minifig_user_inventory").upsert(
+        {
+          user_id: userId,
+          set_num: setNum,
+          is_owned: isOwned,
+          is_favorite: Boolean(minifigFigureFavoriteBySetNum[setNum]),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,set_num" },
+      );
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        return;
+      }
+
+      await loadMinifigGlobalOwnedStats();
+    },
+    [loadMinifigGlobalOwnedStats, minifigFigureFavoriteBySetNum, supabase, t.errorPrefix, userId],
+  );
+
+  const saveMinifigSetFavoriteState = useCallback(
+    async (setNum: string, isFavorite: boolean) => {
+      if (!supabase || !userId) {
+        return;
+      }
+
+      const { error } = await supabase.from("minifig_user_inventory").upsert(
+        {
+          user_id: userId,
+          set_num: setNum,
+          is_owned: Boolean(minifigFigureCheckedBySetNum[setNum]),
+          is_favorite: isFavorite,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,set_num" },
+      );
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+      }
+    },
+    [minifigFigureCheckedBySetNum, supabase, t.errorPrefix, userId],
+  );
+
+  const saveMinifigPartsInventoryState = useCallback(
+    async (setNum: string, checkedByRowId: Record<string, boolean>) => {
+      if (!supabase || !userId) {
+        return;
+      }
+
+      const grouped = new Map<string, { part_num: string; color_name: string; owned_quantity: number }>();
+      for (const row of minifigPartsRows) {
+        const key = `${row.part_num}::${row.color_name}`;
+        const current = grouped.get(key);
+        const isChecked = checkedByRowId[row.row_id] !== false;
+        if (current) {
+          current.owned_quantity += isChecked ? 1 : 0;
+        } else {
+          grouped.set(key, {
+            part_num: row.part_num,
+            color_name: row.color_name || "",
+            owned_quantity: isChecked ? 1 : 0,
+          });
+        }
+      }
+
+      const payload = Array.from(grouped.values()).map((row) => ({
+        user_id: userId,
+        set_num: setNum,
+        part_num: row.part_num,
+        color_name: row.color_name,
+        owned_quantity: row.owned_quantity,
+        updated_at: new Date().toISOString(),
+      }));
+
+      const { error } = await supabase.from("minifig_user_part_inventory").upsert(payload, {
+        onConflict: "user_id,set_num,part_num,color_name",
+      });
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        return;
+      }
+
+      await loadMinifigGlobalOwnedStats();
+    },
+    [loadMinifigGlobalOwnedStats, minifigPartsRows, supabase, t.errorPrefix, userId],
+  );
+
+  const openMinifigFigureParts = useCallback(
+    async (figure: MinifigFigureItem) => {
+      setSelectedMinifigForParts(figure);
+      setShowMinifigPartsPopup(true);
+      setMinifigPartsLoading(true);
+
+      try {
+        const encodedSetNum = encodeURIComponent(figure.set_num);
+        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store" });
+        const payload = (await response.json()) as {
+          error?: string;
+          results?: Array<MinifigFigurePartItem>;
+        };
+
+        if (!response.ok) {
+          setStatus(payload.error || `${t.errorPrefix}: minifigure parts`);
+          setMinifigPartsRows([]);
+          setMinifigPartsLoading(false);
+          return;
+        }
+
+        const rows = Array.isArray(payload.results)
+          ? payload.results
+              .map((row) => ({
+                row_id: "",
+                part_num: String(row.part_num ?? ""),
+                part_name: String(row.part_name ?? ""),
+                color_name: String(row.color_name ?? ""),
+                part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+                quantity: Math.max(1, Number(row.quantity ?? 1)),
+              }))
+              .filter((row) => row.part_num)
+          : [];
+
+        const expandedRows = rows.flatMap((row) =>
+          Array.from({ length: row.quantity }, (_, index) => ({
+            ...row,
+            row_id: `${row.part_num}::${row.color_name}::${index}`,
+            quantity: 1,
+          })),
+        );
+        setMinifigPartsRows(expandedRows);
+
+        if (supabase && userId) {
+          const uniquePartNums = Array.from(new Set(expandedRows.map((row) => row.part_num)));
+          const { data: partInventoryData } = await supabase
+            .from("minifig_user_part_inventory")
+            .select("part_num, color_name, owned_quantity")
+            .eq("user_id", userId)
+            .eq("set_num", figure.set_num)
+            .in("part_num", uniquePartNums);
+
+          const ownedByKey = new Map<string, number>();
+          for (const row of partInventoryData ?? []) {
+            const partNum = String((row as { part_num?: unknown }).part_num ?? "");
+            const colorName = String((row as { color_name?: unknown }).color_name ?? "");
+            const qty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+            ownedByKey.set(getMinifigPartInventoryKey(figure.set_num, partNum, colorName), qty);
+          }
+
+          const nextCheckedMap: Record<string, boolean> = {};
+          const usedByKey = new Map<string, number>();
+          for (const partRow of expandedRows) {
+            const inventoryKey = getMinifigPartInventoryKey(figure.set_num, partRow.part_num, partRow.color_name);
+            const used = usedByKey.get(inventoryKey) ?? 0;
+            const ownedQty = ownedByKey.get(inventoryKey) ?? expandedRows.filter((candidate) => candidate.part_num === partRow.part_num && candidate.color_name === partRow.color_name).length;
+            nextCheckedMap[partRow.row_id] = used < ownedQty;
+            usedByKey.set(inventoryKey, used + 1);
+          }
+          setMinifigPartCheckedByRowId(nextCheckedMap);
+          setMinifigSetHasMissingPartsBySetNum((prev) => ({
+            ...prev,
+            [figure.set_num]: Object.values(nextCheckedMap).some((checked) => !checked),
+          }));
+          setMinifigMissingPartsPreviewBySetNum((prev) => ({
+            ...prev,
+            [figure.set_num]: getMissingMinifigPartRows(expandedRows, nextCheckedMap),
+          }));
+
+          if ((partInventoryData ?? []).length === 0) {
+            const groupedDefaults = new Map<string, { part_num: string; color_name: string; owned_quantity: number }>();
+            for (const partRow of expandedRows) {
+              const key = `${partRow.part_num}::${partRow.color_name}`;
+              const current = groupedDefaults.get(key);
+              if (current) {
+                current.owned_quantity += 1;
+              } else {
+                groupedDefaults.set(key, {
+                  part_num: partRow.part_num,
+                  color_name: partRow.color_name,
+                  owned_quantity: 1,
+                });
+              }
+            }
+
+            const seedPayload = Array.from(groupedDefaults.values()).map((row) => ({
+              user_id: userId,
+              set_num: figure.set_num,
+              part_num: row.part_num,
+              color_name: row.color_name,
+              owned_quantity: row.owned_quantity,
+              updated_at: new Date().toISOString(),
+            }));
+
+            if (seedPayload.length > 0) {
+              const { error: seedError } = await supabase.from("minifig_user_part_inventory").upsert(seedPayload, {
+                onConflict: "user_id,set_num,part_num,color_name",
+              });
+              if (seedError) {
+                setStatus(`${t.errorPrefix}: ${seedError.message}`);
+              }
+            }
+          }
+        } else {
+          setMinifigPartCheckedByRowId(
+            expandedRows.reduce(
+              (acc: Record<string, boolean>, row) => {
+                acc[row.row_id] = true;
+                return acc;
+              },
+              {},
+            ),
+          );
+          setMinifigSetHasMissingPartsBySetNum((prev) => ({
+            ...prev,
+            [figure.set_num]: false,
+          }));
+          setMinifigMissingPartsPreviewBySetNum((prev) => ({
+            ...prev,
+            [figure.set_num]: [],
+          }));
+        }
+
+        setMinifigPartsLoading(false);
+      } catch (error) {
+        setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
+        setMinifigPartsRows([]);
+        setMinifigPartCheckedByRowId({});
+        setMinifigPartsLoading(false);
+      }
+    },
+    [supabase, t.errorPrefix, userId],
+  );
+
+  const openMinifigurasSection = useCallback(async (options?: { navigate?: boolean }) => {
+    if (options?.navigate !== false) {
+      router.push("/minifiguras");
+    }
+    setActiveSection("minifiguras");
+    await loadCollectibleSeries();
+  }, [loadCollectibleSeries, router]);
+
   const loadListItems = useCallback(
     async (listId: string) => {
       if (!supabase || !userId) {
@@ -1173,11 +2762,22 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setListItemsLoading(true);
 
-      const { data, error } = await supabase
+      const listItemsWithValue = await supabase
         .from("list_items")
-        .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity")
+        .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
         .eq("list_id", listId)
         .order("created_at", { ascending: false });
+
+      const listItemsResult = listItemsWithValue.error
+        ? await supabase
+            .from("list_items")
+            .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity")
+            .eq("list_id", listId)
+            .order("created_at", { ascending: false })
+        : listItemsWithValue;
+
+      const data = listItemsResult.data;
+      const error = listItemsResult.error;
 
       if (error) {
         setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -1195,6 +2795,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         display_color_label: parseStoredColorLabel(row.color_name ? String(row.color_name) : null),
         part_img_url: null,
         quantity: Number(row.quantity ?? 1),
+        value: (() => {
+          if (row.value == null) {
+            return null;
+          }
+          const parsed = Number(row.value);
+          return Number.isFinite(parsed) ? parsed : null;
+        })(),
       }));
 
       const partNums = Array.from(new Set(parsedRows.map((item) => item.part_num).filter((item): item is string => Boolean(item))));
@@ -1271,10 +2878,511 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           {},
         ),
       );
+      setItemPriceInputs(
+        parsedRows.reduce(
+          (acc: Record<string, string>, item) => {
+            if (item.value == null || !Number.isFinite(item.value)) {
+              acc[item.item_id] = "";
+            } else {
+              acc[item.item_id] = String(item.value);
+            }
+            return acc;
+          },
+          {},
+        ),
+      );
+
+      const itemIds = parsedRows.map((item) => item.item_id).filter(Boolean);
+      if (itemIds.length > 0) {
+        const { data: offersData } = await supabase
+          .from("wishlist_item_offers")
+          .select("offer_id, list_item_id, requester_id, quantity")
+          .in("list_item_id", itemIds);
+
+        const requesterIds = Array.from(new Set((offersData ?? []).map((row) => String((row as { requester_id?: unknown }).requester_id ?? "")).filter(Boolean)));
+        const requesterNameById = await fetchProfileNamesByIds(requesterIds);
+        const lugMemberNameById = new Map((lugInfoData?.members ?? []).map((member) => [member.id, String(member.full_name ?? "").trim()]));
+
+        const offersMap: Record<string, WishlistOfferDetail[]> = {};
+        (offersData ?? []).forEach((row) => {
+          const listItemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
+          if (!listItemId) {
+            return;
+          }
+          if (!offersMap[listItemId]) {
+            offersMap[listItemId] = [];
+          }
+          const requesterId = String((row as { requester_id?: unknown }).requester_id ?? "");
+          const fallbackRequesterName = requesterId ? `ID ${requesterId.slice(0, 8)}` : labels.noNameFallback;
+          offersMap[listItemId].push({
+            offer_id: String((row as { offer_id?: unknown }).offer_id ?? ""),
+            list_item_id: listItemId,
+            requester_id: requesterId,
+            requester_name: requesterNameById.get(requesterId) || lugMemberNameById.get(requesterId) || fallbackRequesterName,
+            quantity: Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1),
+          });
+        });
+
+        setListItemOffersById(offersMap);
+      } else {
+        setListItemOffersById({});
+      }
+
       setListItemsLoading(false);
     },
-    [supabase, t.errorPrefix, userId],
+    [fetchProfileNamesByIds, labels.noNameFallback, lugInfoData?.members, supabase, t.errorPrefix, userId],
   );
+
+  const loadMiLugPools = useCallback(async () => {
+    if (!supabase || !currentLugId) {
+      return;
+    }
+
+    setMiLugPoolsLoading(true);
+
+    const { data: membersData, error: membersError } = await supabase.rpc("get_lug_members_current", {
+      target_lug_id: currentLugId,
+    });
+
+    if (membersError) {
+      setStatus(`${t.errorPrefix}: ${membersError.message}`);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    const memberIds = Array.from(
+      new Set(((membersData ?? []) as Array<{ id?: unknown }>).map((member) => String(member.id ?? "").trim()).filter(Boolean)),
+    );
+
+    if (memberIds.length === 0) {
+      setMiLugPoolWishlistItems([]);
+      setMiLugPoolSaleItems([]);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    const { data: listsData, error: listsError } = await supabase
+      .from("lists")
+      .select("list_id, owner_id, list_type")
+      .in("owner_id", memberIds)
+      .eq("is_public", true);
+
+    if (listsError) {
+      setStatus(`${t.errorPrefix}: ${listsError.message}`);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    const publicLists: Array<{ list_id: string; owner_id: string; list_type: "deseos" | "venta" }> = (listsData ?? []).map((row) => ({
+      list_id: String(row.list_id ?? ""),
+      owner_id: String(row.owner_id ?? ""),
+      list_type: row.list_type === "venta" ? "venta" : "deseos",
+    }));
+
+    if (publicLists.length === 0) {
+      setMiLugPoolWishlistItems([]);
+      setMiLugPoolSaleItems([]);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    const listIds = publicLists.map((item) => item.list_id);
+    const ownerIds = Array.from(new Set(publicLists.map((item) => item.owner_id).filter(Boolean)));
+
+    const listItemsWithValue = await supabase
+      .from("list_items")
+      .select("item_id, list_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
+      .in("list_id", listIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    const listItemsResult = listItemsWithValue.error
+      ? await supabase
+          .from("list_items")
+          .select("item_id, list_id, part_num, part_name, color_name, imgmatchcolor, quantity")
+          .in("list_id", listIds)
+          .order("created_at", { ascending: false })
+          .limit(500)
+      : listItemsWithValue;
+
+    const listItemsData = listItemsResult.data;
+    const listItemsError = listItemsResult.error;
+
+    if (listItemsError) {
+      setStatus(`${t.errorPrefix}: ${listItemsError.message}`);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    const rows = listItemsData ?? [];
+    const rowItemIds = rows.map((row) => String((row as { item_id?: unknown }).item_id ?? "")).filter(Boolean);
+    const uniquePartNums = Array.from(new Set(rows.map((row) => String((row as { part_num?: unknown }).part_num ?? "").trim()).filter(Boolean)));
+
+    const [{ data: partsData }, { data: colorRowsData }, { data: offersData }] = await Promise.all([
+      uniquePartNums.length > 0
+        ? supabase.from("parts_catalog").select("part_num, part_img_url").in("part_num", uniquePartNums)
+        : Promise.resolve({ data: [] as never[] }),
+      uniquePartNums.length > 0
+        ? supabase.from("part_color_catalog").select("part_num, color_name, part_img_url").in("part_num", uniquePartNums)
+        : Promise.resolve({ data: [] as never[] }),
+      rowItemIds.length > 0
+        ? supabase.from("wishlist_item_offers").select("list_item_id, requester_id, quantity").in("list_item_id", rowItemIds)
+        : Promise.resolve({ data: [] as never[] }),
+    ]);
+
+    const listMetaById = new Map(publicLists.map((item) => [item.list_id, item]));
+    const lugMemberNameById = new Map((lugInfoData?.members ?? []).map((member) => [member.id, String(member.full_name ?? "").trim()]));
+    const partImageByNum = new Map(
+      (partsData ?? []).map((row) => [String((row as { part_num?: unknown }).part_num ?? ""), (row as { part_img_url?: unknown }).part_img_url ? String((row as { part_img_url?: unknown }).part_img_url) : null]),
+    );
+    const colorRowsByPartNum = new Map<string, Array<{ color_name: string; part_img_url: string | null }>>();
+    (colorRowsData ?? []).forEach((row) => {
+      const partNum = String((row as { part_num?: unknown }).part_num ?? "").trim();
+      const colorName = String((row as { color_name?: unknown }).color_name ?? "").trim();
+      if (!partNum || !colorName) {
+        return;
+      }
+      if (!colorRowsByPartNum.has(partNum)) {
+        colorRowsByPartNum.set(partNum, []);
+      }
+      colorRowsByPartNum.get(partNum)?.push({
+        color_name: colorName,
+        part_img_url: (row as { part_img_url?: unknown }).part_img_url ? String((row as { part_img_url?: unknown }).part_img_url) : null,
+      });
+    });
+    const offersByItemId = new Map<string, Array<{ requester_id: string; quantity: number }>>();
+    (offersData ?? []).forEach((row) => {
+      const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
+      if (!itemId) {
+        return;
+      }
+      if (!offersByItemId.has(itemId)) {
+        offersByItemId.set(itemId, []);
+      }
+      offersByItemId.get(itemId)?.push({
+        requester_id: String((row as { requester_id?: unknown }).requester_id ?? ""),
+        quantity: Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1),
+      });
+    });
+
+    const requesterIdsInOffers = Array.from(
+      new Set((offersData ?? []).map((row) => String((row as { requester_id?: unknown }).requester_id ?? "")).filter(Boolean)),
+    );
+    const namesById = await fetchProfileNamesByIds([...ownerIds, ...requesterIdsInOffers]);
+
+    const wishlist: MiLugPoolItem[] = [];
+    const sale: MiLugPoolItem[] = [];
+
+    for (const row of rows) {
+      const listId = String((row as { list_id?: unknown }).list_id ?? "");
+      const listMeta = listMetaById.get(listId);
+      if (!listMeta) {
+        continue;
+      }
+
+      const partNum = String((row as { part_num?: unknown }).part_num ?? "").trim();
+      if (!partNum) {
+        continue;
+      }
+
+      const partName = String((row as { part_name?: unknown }).part_name ?? partNum).trim();
+      const rawColorName = String((row as { color_name?: unknown }).color_name ?? "").trim() || null;
+      const displayColor = parseStoredColorLabel(rawColorName);
+      const imgMatchColor = Boolean((row as { imgmatchcolor?: unknown }).imgmatchcolor ?? true);
+      const publisherName = namesById.get(listMeta.owner_id) || lugMemberNameById.get(listMeta.owner_id) || (listMeta.owner_id ? `ID ${listMeta.owner_id.slice(0, 8)}` : labels.noNameFallback);
+      const itemId = String((row as { item_id?: unknown }).item_id ?? `${listId}-${partNum}`);
+      const baseQuantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
+      const offers = offersByItemId.get(itemId) ?? [];
+      const totalOffered = offers.reduce((acc, offer) => acc + Math.max(1, offer.quantity), 0);
+      const currentUserOfferQuantity = offers
+        .filter((offer) => offer.requester_id === userId)
+        .reduce((acc, offer) => acc + Math.max(1, offer.quantity), 0);
+      const remainingQuantity = Math.max(0, baseQuantity - totalOffered);
+
+      const displayQuantity = listMeta.list_type === "deseos" ? remainingQuantity : baseQuantity;
+
+      if (listMeta.list_type === "deseos" && listMeta.owner_id !== userId && remainingQuantity <= 0 && currentUserOfferQuantity <= 0) {
+        continue;
+      }
+
+      const baseImage = partImageByNum.get(partNum) ?? null;
+      let colorImage: string | null = null;
+      if (displayColor && imgMatchColor) {
+        const target = normalizeColorLabel(displayColor);
+        const colorRows = colorRowsByPartNum.get(partNum) ?? [];
+        const exact = colorRows.find((colorRow) => normalizeColorLabel(colorRow.color_name) === target);
+        if (exact?.part_img_url) {
+          colorImage = exact.part_img_url;
+        } else {
+          const partial = colorRows.find((colorRow) => {
+            const current = normalizeColorLabel(colorRow.color_name);
+            return current.includes(target) || target.includes(current);
+          });
+          colorImage = partial?.part_img_url ?? null;
+        }
+      }
+
+      const item: MiLugPoolItem = {
+        id: itemId,
+        part_num: partNum,
+        part_name: partName,
+        part_img_url: colorImage || baseImage,
+        color_label: displayColor,
+        list_type: listMeta.list_type,
+        publisher_id: listMeta.owner_id,
+        quantity: displayQuantity,
+        requested_quantity: baseQuantity,
+        remaining_quantity: remainingQuantity,
+        current_user_offer_quantity: currentUserOfferQuantity,
+        value: (row as { value?: unknown }).value == null ? null : Number((row as { value?: unknown }).value),
+        publisher_name: publisherName,
+      };
+
+      if (listMeta.list_type === "venta") {
+        sale.push(item);
+      } else {
+        wishlist.push(item);
+      }
+    }
+
+    setMiLugPoolWishlistItems(wishlist);
+    setMiLugPoolSaleItems(sale);
+    setMiLugWishlistPage(1);
+    setMiLugSalePage(1);
+    setMiLugPoolsLoading(false);
+  }, [currentLugId, fetchProfileNamesByIds, labels.noNameFallback, lugInfoData?.members, supabase, t.errorPrefix, userId]);
+
+  const loadOffersGivenSummary = useCallback(async () => {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setOffersPanelsLoading(true);
+
+    const { data: offersData, error: offersError } = await supabase
+      .from("wishlist_item_offers")
+      .select("offer_id, list_item_id, quantity")
+      .eq("requester_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (offersError) {
+      setStatus(`${t.errorPrefix}: ${offersError.message}`);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const itemIds = Array.from(new Set((offersData ?? []).map((row) => String((row as { list_item_id?: unknown }).list_item_id ?? "")).filter(Boolean)));
+    if (itemIds.length === 0) {
+      setOffersGivenRows([]);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const { data: itemsData, error: itemsError } = await supabase.from("list_items").select("item_id, list_id, part_num, part_name").in("item_id", itemIds);
+    if (itemsError) {
+      setStatus(`${t.errorPrefix}: ${itemsError.message}`);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const listIds = Array.from(new Set((itemsData ?? []).map((row) => String((row as { list_id?: unknown }).list_id ?? "")).filter(Boolean)));
+    if (listIds.length === 0) {
+      setOffersGivenRows([]);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const { data: listsData, error: listsError } = await supabase.from("lists").select("list_id, owner_id").in("list_id", listIds);
+    if (listsError) {
+      setStatus(`${t.errorPrefix}: ${listsError.message}`);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const listOwnerByListId = new Map(
+      (listsData ?? []).map((row) => [String((row as { list_id?: unknown }).list_id ?? ""), String((row as { owner_id?: unknown }).owner_id ?? "")]),
+    );
+    const itemListByItemId = new Map(
+      (itemsData ?? []).map((row) => [String((row as { item_id?: unknown }).item_id ?? ""), String((row as { list_id?: unknown }).list_id ?? "")]),
+    );
+    const itemLabelByItemId = new Map(
+      (itemsData ?? []).map((row) => {
+        const itemId = String((row as { item_id?: unknown }).item_id ?? "");
+        const partNum = String((row as { part_num?: unknown }).part_num ?? "");
+        const partName = String((row as { part_name?: unknown }).part_name ?? "");
+        return [itemId, `${partNum || "-"} - ${partName || "Pieza"}`];
+      }),
+    );
+
+    const ownerIds = Array.from(new Set(Array.from(listOwnerByListId.values()).filter(Boolean)));
+    const ownerNamesById = await fetchProfileNamesByIds(ownerIds);
+
+    const rows: OfferSummaryRow[] = (offersData ?? []).map((row) => {
+      const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
+      const listId = itemListByItemId.get(itemId) ?? "";
+      const ownerId = listOwnerByListId.get(listId) ?? "";
+      const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
+      const userName = ownerNamesById.get(ownerId) || "Usuario";
+      const partLabel = itemLabelByItemId.get(itemId) || "- - Pieza";
+
+      return {
+        id: String((row as { offer_id?: unknown }).offer_id ?? itemId),
+        userName,
+        partLabel,
+        quantity,
+      };
+    });
+
+    rows.sort((a, b) => {
+      const byUser = a.userName.localeCompare(b.userName, "es", { sensitivity: "base" });
+      if (byUser !== 0) return byUser;
+      return a.partLabel.localeCompare(b.partLabel, "es", { sensitivity: "base" });
+    });
+    setOffersGivenRows(rows);
+    setOffersPanelsLoading(false);
+  }, [fetchProfileNamesByIds, supabase, t.errorPrefix, userId]);
+
+  const loadOffersReceivedSummary = useCallback(async () => {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setOffersPanelsLoading(true);
+
+    const { data: myWishlists } = await supabase
+      .from("lists")
+      .select("list_id")
+      .eq("owner_id", userId)
+      .eq("list_type", "deseos");
+
+    const myListIds = (myWishlists ?? []).map((row) => String((row as { list_id?: unknown }).list_id ?? "")).filter(Boolean);
+    if (myListIds.length === 0) {
+      setOffersReceivedRows([]);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const { data: myItems } = await supabase
+      .from("list_items")
+      .select("item_id, part_num, part_name")
+      .in("list_id", myListIds);
+
+    const myItemIds = (myItems ?? []).map((row) => String((row as { item_id?: unknown }).item_id ?? "")).filter(Boolean);
+    if (myItemIds.length === 0) {
+      setOffersReceivedRows([]);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const { data: offersData, error: offersError } = await supabase
+      .from("wishlist_item_offers")
+      .select("offer_id, list_item_id, requester_id, quantity")
+      .in("list_item_id", myItemIds)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (offersError) {
+      setStatus(`${t.errorPrefix}: ${offersError.message}`);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    const itemLabelById = new Map(
+      (myItems ?? []).map((row) => {
+        const itemId = String((row as { item_id?: unknown }).item_id ?? "");
+        const partNum = String((row as { part_num?: unknown }).part_num ?? "");
+        const partName = String((row as { part_name?: unknown }).part_name ?? "");
+        return [itemId, `${partNum || "-"} - ${partName || "Pieza"}`];
+      }),
+    );
+
+    const requesterIds = Array.from(
+      new Set((offersData ?? []).map((row) => String((row as { requester_id?: unknown }).requester_id ?? "")).filter(Boolean)),
+    );
+    const requesterNamesById = await fetchProfileNamesByIds(requesterIds);
+
+    const rows: OfferSummaryRow[] = (offersData ?? []).map((row) => {
+      const requesterId = String((row as { requester_id?: unknown }).requester_id ?? "");
+      const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
+      const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
+      const userName = requesterNamesById.get(requesterId) || "Usuario";
+      const partLabel = itemLabelById.get(itemId) || "- - Pieza";
+
+      return {
+        id: String((row as { offer_id?: unknown }).offer_id ?? itemId),
+        userName,
+        partLabel,
+        quantity,
+      };
+    });
+
+    rows.sort((a, b) => {
+      const byUser = a.userName.localeCompare(b.userName, "es", { sensitivity: "base" });
+      if (byUser !== 0) return byUser;
+      return a.partLabel.localeCompare(b.partLabel, "es", { sensitivity: "base" });
+    });
+    setOffersReceivedRows(rows);
+    setOffersPanelsLoading(false);
+  }, [fetchProfileNamesByIds, supabase, t.errorPrefix, userId]);
+
+  function printOffersSummary(title: string, rows: OfferSummaryRow[]) {
+    if (rows.length === 0) {
+      setStatus(statusText.noDataToExport);
+      return;
+    }
+
+    const exportDateTime = new Date().toLocaleString("es-AR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const exportUserLabel = displayName || labels.noNameFallback;
+    const exportEmailLabel = userEmail || labels.noMail;
+
+    const rowsHtml = rows
+      .map((row) => {
+        return `<tr><td>${escapeHtml(row.userName)}</td><td>${escapeHtml(row.partLabel)}</td><td>${Math.max(1, Number(row.quantity || 1))}</td></tr>`;
+      })
+      .join("");
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>
+body{font-family:Arial,sans-serif;padding:24px;color:#111}
+h1{margin:0 0 16px 0;font-size:22px}
+.meta{margin:0 0 16px 0;font-size:12px;line-height:1.5}
+table{width:100%;border-collapse:collapse}
+th,td{border:1px solid #d1d5db;padding:8px;font-size:12px;text-align:left;vertical-align:middle}
+th{background:#f3f4f6}
+</style></head><body>
+<p class="meta"><strong>${escapeHtml(labels.exportUser)}:</strong> ${escapeHtml(exportUserLabel)}<br/><strong>${escapeHtml(labels.exportMail)}:</strong> ${escapeHtml(exportEmailLabel)}<br/><strong>${escapeHtml(labels.exportDate)}:</strong> ${escapeHtml(exportDateTime)}</p>
+<h1>${escapeHtml(title)}</h1>
+<table><thead><tr><th>${escapeHtml(labels.exportUser)}</th><th>${escapeHtml(labels.exportPiece)}</th><th>${escapeHtml(labels.exportQuantity)}</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+</body></html>`;
+
+    const popup = window.open("", "_blank", "width=960,height=720");
+    if (!popup) {
+      setStatus(statusText.printWindowFailed);
+      return;
+    }
+
+    popup.document.open();
+    popup.document.write(html);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  }
+
+  async function openOffersGivenPanel() {
+    setShowOffersGivenPanel(true);
+    await loadOffersGivenSummary();
+  }
+
+  async function openOffersReceivedPanel() {
+    setShowOffersReceivedPanel(true);
+    await loadOffersReceivedSummary();
+  }
 
   async function loadGoBrickColors() {
     const response = await fetch("/api/gobrick-colors");
@@ -1322,6 +3430,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       setSelectedPartColorImageUrl(null);
       setSelectedPartColorImageMissing(false);
       setAddItemQuantity(1);
+      setAddItemPriceInput("");
       if (partsCategories.length === 0) {
         await loadPartsCategories();
       }
@@ -1362,8 +3471,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       }
 
       if (error || !data) {
-        setStatus("No pudimos abrir esa lista.");
-        setActiveSection("listas");
+        if (!data && listasItems.length === 0) {
+          return;
+        }
+        setStatus(statusText.listOpenFailed);
         return;
       }
 
@@ -1378,7 +3489,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       await openListDetailPage(lista, { navigate: false });
     },
-    [listasItems, openListDetailPage, supabase, userId],
+    [listasItems, openListDetailPage, statusText.listOpenFailed, supabase, userId],
   );
 
   function handleAddItemColorMode(mode: "bricklink" | "lego") {
@@ -1419,7 +3530,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     const nextName = renameListaInput.trim();
     if (!nextName) {
-      setStatus("El nombre de la lista es obligatorio.");
+      setStatus(statusText.listNameRequired);
       return;
     }
 
@@ -1501,6 +3612,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       quantity?: number;
       colorMode?: "bricklink" | "lego";
       imgMatchColor?: boolean;
+      value?: number | null;
     },
   ) {
     if (!supabase || !selectedListForItems || !userId) {
@@ -1513,17 +3625,43 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const colorName = cleanColor && cleanColor !== NO_COLOR_LABEL ? `${colorMode === "lego" ? "LEGO" : "BrickLink"}: ${cleanColor}` : null;
     const hasSelectedColor = Boolean(cleanColor && cleanColor !== NO_COLOR_LABEL);
     const imgMatchColor = hasSelectedColor ? Boolean(options?.imgMatchColor ?? false) : true;
+    const value = options?.value == null ? null : Number(options.value);
 
     setListasSaving(true);
 
-    const { error } = await supabase.from("list_items").insert({
+    const insertPayload: {
+      list_id: string;
+      part_num: string;
+      part_name: string;
+      color_name: string | null;
+      imgmatchcolor: boolean;
+      quantity: number;
+      value?: number;
+    } = {
       list_id: selectedListForItems.id,
       part_num: part.part_num,
       part_name: part.name,
       color_name: colorName,
       imgmatchcolor: imgMatchColor,
       quantity,
-    });
+    };
+
+    if (value != null) {
+      insertPayload.value = value;
+    }
+
+    const { error } = await supabase.from("list_items").insert(insertPayload);
+
+    if (
+      error &&
+      (/column\s+"?value"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'value' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      setStatus(statusText.missingPriceMigration);
+      setListasSaving(false);
+      return;
+    }
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -1533,6 +3671,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     await loadListItems(selectedListForItems.id);
     await loadListasFromDb();
+    setListItemsPage(1);
     setSelectedSearchPartNum(part.part_num);
     setStatus(`Item agregado: ${part.part_num}`);
     setListasSaving(false);
@@ -1540,8 +3679,20 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
   async function addSelectedPartToList() {
     if (!selectedSearchPart) {
-      setStatus("Seleccioná una pieza primero.");
+      setStatus(statusText.selectPartFirst);
       return;
+    }
+
+    const isSaleList = selectedListForItems?.tipo === "venta";
+    let salePriceValue: number | null = null;
+    if (isSaleList) {
+      const normalizedPrice = addItemPriceInput.trim().replace(",", ".");
+      const parsed = Number(normalizedPrice);
+      if (!normalizedPrice || !Number.isFinite(parsed) || parsed < 0) {
+        setStatus(statusText.validSalePrice);
+        return;
+      }
+      salePriceValue = Math.round(parsed * 100) / 100;
     }
 
     await addPartToList(selectedSearchPart, {
@@ -1549,6 +3700,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       quantity: addItemQuantity,
       colorMode: addItemColorMode,
       imgMatchColor: !selectedPartColorImageMissing,
+      value: salePriceValue,
     });
 
     setPartsSearchQuery("");
@@ -1561,6 +3713,182 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setSelectedPartColorImageMissing(false);
     setAddItemColorNameInput(NO_COLOR_LABEL);
     setAddItemQuantity(1);
+    setAddItemPriceInput("");
+  }
+
+  async function openPdfExportPrint() {
+    if (!selectedListForItems) {
+      setStatus(statusText.noListSelectedForExport);
+      return;
+    }
+
+    const lots: Lot[] = listItemsRows
+      .filter((row) => Boolean(row.part_num))
+      .map((row) => ({
+        id: row.item_id,
+        part_num: row.part_num || "",
+        part_name: row.part_name || row.part_num || "",
+        color_name: row.display_color_label || null,
+        quantity: Math.max(1, Number(row.quantity || 1)),
+        value: row.value == null ? null : Number(row.value),
+      }));
+
+    if (lots.length === 0) {
+      setStatus(statusText.noPartsToExport);
+      return;
+    }
+
+    const partImages: PartImageLookup = {};
+    listItemsRows.forEach((row) => {
+      if (!row.part_num || !row.part_img_url) {
+        return;
+      }
+      partImages[getPartImageKey(row.part_num, row.display_color_label)] = row.part_img_url;
+      partImages[getPartImageKey(row.part_num, null)] = row.part_img_url;
+    });
+
+    const displayListName = selectedListForItems.nombre;
+    const isSaleList = selectedListForItems.tipo === "venta";
+    const availableColors = goBrickColors.map((color) => ({
+      name: color.lego || "",
+      blName: color.bricklink || "",
+      hex: color.hex || "d1d5db",
+    }));
+
+    const title = `${isSaleList ? labels.saleListType : labels.wishlistListType} ${displayListName}`;
+    const exportDateTime = new Date().toLocaleString("es-AR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const exportUserLabel = displayName || labels.noNameFallback;
+    const exportEmailLabel = userEmail || labels.noMail;
+    const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    const pdfImagesByKey: PartImageLookup = { ...partImages };
+
+    const missingImageItems = lots
+      .map((lot) => ({ part_num: lot.part_num, color_name: lot.color_name }))
+      .filter((item, index, array) => {
+        const key = getPartImageKey(item.part_num, item.color_name);
+        if (pdfImagesByKey[key] !== undefined) return false;
+        return array.findIndex((c) => getPartImageKey(c.part_num, c.color_name) === key) === index;
+      });
+
+    if (missingImageItems.length > 0) {
+      try {
+        const response = await fetch("/api/rebrickable/part-images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: missingImageItems }),
+        });
+
+        if (response.ok) {
+          const payload = (await response.json()) as {
+            results?: Array<{ key: string; part_num: string; part_img_url: string | null }>;
+          };
+          for (const part of payload.results ?? []) {
+            const key = part.key || getPartImageKey(part.part_num, null);
+            pdfImagesByKey[key] = part.part_img_url;
+          }
+        }
+      } catch {
+        // ignore image fetch errors for export
+      }
+    }
+
+    const rowsHtml = lots
+      .map((lot) => {
+        const rawName = (lot.part_name || lot.part_num).trim();
+        const normalizedPartNum = lot.part_num.trim();
+        const cleanedName = rawName.replace(new RegExp(`^#?\\s*${escapeRegex(normalizedPartNum)}\\s*-\\s*`, "i"), "").trim();
+
+        const name = escapeHtml(cleanedName || rawName);
+        const colorLabel = escapeHtml(lot.color_name || labels.noColor);
+        const colorHex = getColorHexFromName(lot.color_name, availableColors);
+        const colorText = getTextColorForBackground(colorHex);
+        const qty = Math.max(1, Number(lot.quantity || 1));
+
+        const imageKey = getPartImageKey(lot.part_num, lot.color_name);
+        const imageUrl = pdfImagesByKey[imageKey] ?? pdfImagesByKey[getPartImageKey(lot.part_num, null)] ?? null;
+        const imageCell = imageUrl
+          ? `<img src="${escapeHtml(imageUrl)}" alt="${name}" class="part-image"/>`
+          : `<div class="part-image empty">${escapeHtml(labels.noImageCache)}</div>`;
+
+        const priceCell = isSaleList ? `<td>${lot.value == null ? "" : `$${escapeHtml(String(lot.value))}`}</td>` : "";
+
+        return `<tr><td>${imageCell}</td><td>${name}</td><td class="color-cell" style="background:${colorHex};color:${colorText};">${colorLabel}</td><td>${qty}</td>${priceCell}</tr>`;
+      })
+      .join("");
+
+    const priceHeader = isSaleList ? `<th>${escapeHtml(labels.price)}</th>` : "";
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>
+body{font-family:Arial,sans-serif;padding:24px;color:#111}
+h1{margin:0 0 16px 0;font-size:22px}
+.meta{margin:0 0 16px 0;font-size:12px;line-height:1.5}
+table{width:100%;border-collapse:collapse}
+th,td{border:1px solid #d1d5db;padding:8px;font-size:12px;text-align:left;vertical-align:middle}
+th{background:#f3f4f6}
+.part-image{width:56px;height:56px;object-fit:contain;display:block;margin:0 auto}
+.part-image.empty{width:56px;height:56px;border:1px dashed #cbd5e1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#64748b;background:#f8fafc}
+.color-cell{font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+</style></head><body>
+<p class="meta"><strong>${escapeHtml(labels.exportUser)}:</strong> ${escapeHtml(exportUserLabel)}<br/><strong>${escapeHtml(labels.exportMail)}:</strong> ${escapeHtml(exportEmailLabel)}<br/><strong>${escapeHtml(labels.exportDate)}:</strong> ${escapeHtml(exportDateTime)}</p>
+<h1>${escapeHtml(title)}</h1>
+<table><thead><tr><th>${escapeHtml(labels.exportImage)}</th><th>${escapeHtml(labels.exportName)}</th><th>${escapeHtml(labels.exportColor)}</th><th>${escapeHtml(labels.exportQuantity)}</th>${priceHeader}</tr></thead><tbody>${rowsHtml}</tbody></table>
+</body></html>`;
+
+    const popup = window.open("", "_blank", "width=960,height=720");
+    if (!popup) {
+      setStatus(statusText.printWindowFailed);
+      return;
+    }
+
+    popup.document.open();
+    popup.document.write(html);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  }
+
+  async function submitWishlistOfferFromPool() {
+    if (!supabase || !userId || !selectedMiLugPoolItem) {
+      return;
+    }
+    if (selectedMiLugPoolItem.type !== "wishlist") {
+      return;
+    }
+    if (selectedMiLugPoolItem.item.publisher_id === userId) {
+      setStatus(statusText.cannotOfferOwnWishlist);
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(miLugOfferQuantityInput || "1", 10) || 1);
+
+    setMiLugPoolsLoading(true);
+    const { error } = await supabase.from("wishlist_item_offers").upsert(
+      {
+        list_item_id: selectedMiLugPoolItem.item.id,
+        requester_id: userId,
+        quantity,
+      },
+      { onConflict: "list_item_id,requester_id" },
+    );
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    setStatus(statusText.offerSent);
+    await loadMiLugPools();
+    setMiLugPoolsLoading(false);
+    setSelectedMiLugPoolItem(null);
   }
 
   function selectPartForAddItem(part: PartCatalogItem, options?: { closeCatalog?: boolean }) {
@@ -1595,7 +3923,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     await loadListItems(selectedListForItems.id);
     await loadListasFromDb();
-    setStatus("Item eliminado.");
+    setStatus(statusText.itemDeleted);
     setListasSaving(false);
   }
 
@@ -1624,6 +3952,57 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setItemQuantityInputs((prev) => ({ ...prev, [itemId]: String(quantity) }));
     await loadListItems(selectedListForItems.id);
     await loadListasFromDb();
+    setListasSaving(false);
+  }
+
+  async function saveListItemPrice(itemId: string) {
+    if (!supabase || !selectedListForItems) {
+      return;
+    }
+
+    const raw = String(itemPriceInputs[itemId] ?? "").trim().replace(",", ".");
+    if (!raw) {
+      setStatus(statusText.validPrice);
+      return;
+    }
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setStatus(statusText.validPrice);
+      return;
+    }
+
+    const value = Math.round(parsed * 100) / 100;
+
+    setListasSaving(true);
+
+    const { error } = await supabase
+      .from("list_items")
+      .update({ value })
+      .eq("item_id", itemId)
+      .eq("list_id", selectedListForItems.id);
+
+    if (
+      error &&
+      (/column\s+"?value"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'value' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      setStatus(statusText.dbMissingPriceColumn);
+      setListasSaving(false);
+      return;
+    }
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setListasSaving(false);
+      return;
+    }
+
+    setItemPriceInputs((prev) => ({ ...prev, [itemId]: String(value) }));
+    await loadListItems(selectedListForItems.id);
+    await loadListasFromDb();
+    setStatus(statusText.priceUpdated);
     setListasSaving(false);
   }
 
@@ -1921,12 +4300,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMaintenanceEnabled(Boolean(profileData?.maintenance_enabled));
     setMaintenanceMessageLine1(String(profileData?.maintenance_message_line1 ?? "Estamos en mantenimiento"));
     setMaintenanceMessageLine2(String(profileData?.maintenance_message_line2 ?? "Volvé en un rato"));
+    setFooterLegend(String(profileData?.maintenance_footer_legend ?? "LUGs App"));
 
     setDisplayName(fullName || fallbackName);
     setSelectedFace(face);
     setPreviewFace(face);
 
-    if (lang === "es" || lang === "en") {
+    if (lang === "es" || lang === "en" || lang === "pt") {
       setLanguage(lang);
       if (typeof window !== "undefined") {
         window.localStorage.setItem("ui_language", lang);
@@ -2050,6 +4430,153 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   }, [activeSection, openListasSection, userId]);
 
   useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    void loadCollectibleSeries();
+  }, [activeSection, loadCollectibleSeries, userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    void loadMinifigGlobalOwnedStats();
+  }, [activeSection, loadMinifigGlobalOwnedStats, userId]);
+
+  useEffect(() => {
+    if (!supabase || !userId) {
+      return;
+    }
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from("minifig_user_ui_preferences")
+        .select("show_only_favorite_series, show_only_favorite_figures")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (cancelled || !data) {
+        return;
+      }
+
+      const onlyFavoriteSeries = Boolean((data as { show_only_favorite_series?: unknown }).show_only_favorite_series);
+      const onlyFavoriteFigures = Boolean((data as { show_only_favorite_figures?: unknown }).show_only_favorite_figures);
+      setShowOnlyFavoriteSeries(onlyFavoriteSeries);
+      setShowOnlyFavoriteFigures(onlyFavoriteFigures);
+      setMinifigFiguresFilter(onlyFavoriteFigures ? "favorite" : "all");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, supabase, userId]);
+
+  useEffect(() => {
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      void loadMinifigSearchResults(minifigSearchQuery);
+    }, 220);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [activeSection, loadMinifigSearchResults, minifigSearchQuery]);
+
+  useEffect(() => {
+    setListItemsPage(1);
+  }, [selectedListForItems?.id]);
+
+  useEffect(() => {
+    if (!userId || !currentLugId) {
+      return;
+    }
+    if (activeSection !== "mi_lug") {
+      return;
+    }
+
+    void loadMiLugPools();
+  }, [activeSection, currentLugId, loadMiLugPools, userId]);
+
+  useEffect(() => {
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    checkedMinifigSeriesIds.forEach((seriesId) => {
+      const cachedRows = minifigFiguresBySeriesId[seriesId];
+      if (cachedRows && cachedRows.length > 0) {
+        return;
+      }
+      void loadMinifigFiguresForSeries(seriesId);
+    });
+  }, [activeSection, checkedMinifigSeriesIds, loadMinifigFiguresForSeries, minifigFiguresBySeriesId]);
+
+  useEffect(() => {
+    if (activeSection === "mi_lug") {
+      setMiLugExpandedPool("wishlist");
+    }
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (!supabase || !currentLugId) {
+      return;
+    }
+    if (activeSection !== "mi_lug") {
+      return;
+    }
+
+    const client = supabase;
+
+    let cancelled = false;
+
+    async function loadMiLugHeader() {
+      const { data } = await client
+        .from("lugs")
+        .select("nombre, logo_data_url")
+        .eq("lug_id", currentLugId)
+        .maybeSingle();
+
+      if (cancelled) {
+        return;
+      }
+
+      setMiLugHeaderName(data?.nombre ? String(data.nombre) : null);
+      setMiLugHeaderLogo(data?.logo_data_url ? String(data.logo_data_url) : null);
+    }
+
+    void loadMiLugHeader();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, currentLugId, supabase]);
+
+  useEffect(() => {
+    if (!selectedMiLugPoolItem) {
+      setMiLugOfferQuantityInput("1");
+      return;
+    }
+
+    const current = Math.max(1, Number(selectedMiLugPoolItem.item.current_user_offer_quantity || 1));
+    setMiLugOfferQuantityInput(String(current));
+  }, [selectedMiLugPoolItem]);
+
+  useEffect(() => {
     if (!userId || !isMaster) {
       return;
     }
@@ -2166,6 +4693,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   }, [loadMasterEmptyNotificationsList, showMasterEmptyLugsPanel]);
 
   useEffect(() => {
+    if (!showMasterPanel) {
+      return;
+    }
+    setMaintenanceDraftFooterLegend(footerLegend || "");
+  }, [footerLegend, showMasterPanel]);
+
+  useEffect(() => {
     if (!userId) {
       return;
     }
@@ -2199,16 +4733,23 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return;
     }
 
+    if (listasLoading) {
+      return;
+    }
+
+    if (listasItems.length === 0) {
+      void loadListasFromDb();
+      return;
+    }
+
     const fromMemory = listasItems.find((item) => item.id === initialListId);
     if (fromMemory) {
       void openListDetailPage(fromMemory, { navigate: false });
       return;
     }
 
-    if (!listasLoading) {
-      void openListDetailById(initialListId, userId);
-    }
-  }, [activeSection, initialListId, listasItems, listasLoading, openListDetailById, openListDetailPage, selectedListForItems?.id, userId]);
+    void openListDetailById(initialListId, userId);
+  }, [activeSection, initialListId, listasItems, listasLoading, loadListasFromDb, openListDetailById, openListDetailPage, selectedListForItems?.id, userId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2242,6 +4783,32 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setLoading(false);
   }
 
+  async function changeUiLanguage(next: UiLanguage) {
+    if (next === language) {
+      setShowLanguagePickerPopup(false);
+      return;
+    }
+
+    setLanguageChanging(true);
+    setLanguage(next);
+    setSettingsLanguageInput(next);
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("ui_language", next);
+    }
+
+    if (supabase && userId) {
+      await ensureProfile(userId, userEmail);
+      const { error } = await supabase.from("profiles").update({ preferred_language: next }).eq("id", userId);
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+      }
+    }
+
+    setShowLanguagePickerPopup(false);
+    setLanguageChanging(false);
+  }
+
   async function openUserSettings() {
     if (!supabase || !userId) {
       return;
@@ -2265,7 +4832,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setSettingsEmailInput(userEmail ?? "");
     setSettingsSocialPlatform(String(data?.social_platform ?? "instagram") === "facebook" ? "facebook" : "instagram");
     setSettingsSocialHandle(String(data?.social_handle ?? ""));
-    setSettingsLanguageInput(String(data?.preferred_language ?? language) === "en" ? "en" : "es");
+    const preferredLanguage = String(data?.preferred_language ?? language);
+    setSettingsLanguageInput(preferredLanguage === "en" ? "en" : preferredLanguage === "pt" ? "pt" : "es");
     setRolLug(String(data?.rol_lug ?? "") === "admin" ? "admin" : String(data?.rol_lug ?? "") === "common" ? "common" : null);
 
     const resolvedSettingsLugId = String(data?.current_lug_id ?? currentLugId ?? "").trim() || null;
@@ -2282,9 +4850,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         .eq("lug_id", resolvedSettingsLugId)
         .maybeSingle();
 
-      setSettingsLugName(String(lugData?.nombre ?? "Sin LUG"));
+      setSettingsLugName(String(lugData?.nombre ?? labels.noLug));
     } else {
-      setSettingsLugName("Sin LUG");
+      setSettingsLugName(labels.noLug);
     }
 
     setShowPasswordFields(false);
@@ -2303,13 +4871,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     if (showPasswordFields) {
       if (settingsPasswordInput.length < 6) {
-        setStatus("La nueva contrasena debe tener al menos 6 caracteres.");
+        setStatus(statusText.passwordMinLength);
         setSettingsSaving(false);
         return;
       }
 
       if (settingsPasswordInput !== settingsPasswordConfirmInput) {
-        setStatus("Las contrasenas no coinciden.");
+        setStatus(statusText.passwordsMismatch);
         setSettingsSaving(false);
         return;
       }
@@ -2366,7 +4934,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setSettingsPasswordInput("");
     setSettingsPasswordConfirmInput("");
     setSettingsSaving(false);
-    setStatus("Configuracion guardada.");
+    setStatus(statusText.settingsSaved);
   }
 
   async function handleMasterLogoFileChange(file: File | null) {
@@ -2437,7 +5005,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     if (!lugNombre.trim()) {
-      setStatus("El nombre del LUG es obligatorio.");
+      setStatus(statusText.lugNameRequired);
       return;
     }
 
@@ -2538,7 +5106,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setCurrentLugId(lugId);
     setSettingsLugId(lugId);
     await loadCurrentLugPalette(lugId);
-    setStatus("LUG asignado al usuario.");
+    setStatus(statusText.lugAssigned);
   }
 
   function openJoinRequestForm(lugId: string, lugName: string) {
@@ -2632,6 +5200,63 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   async function openMasterEmptyLugsPanel() {
     setShowMasterEmptyLugsPanel(true);
     await loadMasterEmptyNotificationsList();
+  }
+
+  async function openMiLugMembersPanel() {
+    if (!supabase || !currentLugId) {
+      return;
+    }
+
+    setShowMiLugMembersPanel(true);
+    setMiLugMembersLoading(true);
+
+    const { data, error } = await supabase.rpc("get_lug_members_current", {
+      target_lug_id: currentLugId,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMiLugMembersRows([]);
+      setMiLugMembersLoading(false);
+      return;
+    }
+
+    const membersRows = (data ?? []) as Array<Record<string, unknown>>;
+    const members = membersRows
+      .map((member) => ({
+        id: String(member.id ?? ""),
+        full_name: String(member.full_name ?? "Usuario"),
+        social_platform: member.social_platform ? String(member.social_platform) : null,
+        social_handle: member.social_handle ? String(member.social_handle) : null,
+        rol_lug: member.rol_lug ? String(member.rol_lug) : null,
+      }))
+      .filter((member) => member.id);
+
+    setMiLugMembersRows(members);
+    setMiLugMembersLoading(false);
+  }
+
+  async function promoteMiLugMemberToAdmin(memberId: string, memberName: string) {
+    if (!supabase || !currentLugId) {
+      return;
+    }
+
+    setPromoteMemberLoadingId(memberId);
+
+    const { error } = await supabase.rpc("promote_lug_member_to_admin", {
+      target_lug_id: currentLugId,
+      target_member_id: memberId,
+    });
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setPromoteMemberLoadingId(null);
+      return;
+    }
+
+    setStatus(`${memberName} ahora es admin del LUG.`);
+    await openMiLugMembersPanel();
+    setPromoteMemberLoadingId(null);
   }
 
   async function resolveMasterEmptyLug(notificationId: string, actionValue: "delete" | "open") {
@@ -2919,7 +5544,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
   async function openSettingsLugPanel() {
     if (!supabase || !settingsLugId) {
-      setStatus("Este usuario no tiene LUG asignado.");
+      setStatus(statusText.userHasNoLug);
       return;
     }
 
@@ -2957,7 +5582,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     if (rolLug !== "admin") {
-      setStatus("Solo un admin del LUG puede editar esta informacion.");
+      setStatus(statusText.onlyAdminCanEditLug);
       return;
     }
 
@@ -2997,7 +5622,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
     setSettingsLugSaving(false);
     setShowSettingsLugPanel(false);
-    setStatus("Informacion del LUG actualizada.");
+    setStatus(statusText.lugInfoUpdated);
   }
 
   const loadMasterLugs = useCallback(async () => {
@@ -3040,7 +5665,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const countsResult = await supabase.rpc("get_lug_member_counts_current");
 
     if (countsResult.error) {
-      setStatus("No pudimos calcular la cantidad de miembros por LUG.");
+      setStatus(statusText.lugMemberCountFailed);
     }
 
     const countRows = (countsResult.data ?? []) as Array<Record<string, unknown>>;
@@ -3066,12 +5691,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     setMasterLugs(parsed);
     setMasterLugsLoading(false);
-  }, [supabase, t.errorPrefix]);
+  }, [statusText.lugMemberCountFailed, supabase, t.errorPrefix]);
+
+  useEffect(() => {
+    if (!mustSelectLugOnDashboard) {
+      return;
+    }
+
+    setShowLugsPanel(true);
+    void loadMasterLugs();
+  }, [loadMasterLugs, mustSelectLugOnDashboard]);
 
   if (maintenanceEnabled && !isMaster) {
     return (
       <main className="bg-lego-tile min-h-screen">
-        <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="flex min-h-screen flex-col items-center justify-center px-4">
           <div className="flex flex-col items-center gap-4">
             <Image
               src="/api/avatar/Constructor.png"
@@ -3085,6 +5719,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               <p className="font-cubano-title text-3xl font-semibold text-white">{maintenanceMessageLine1}</p>
               <p className="font-cubano-title text-2xl font-semibold text-white">{maintenanceMessageLine2}</p>
             </div>
+          </div>
+          <div className="mt-6 w-full px-4 text-center">
+            <p className="mx-auto inline-block px-4 py-1 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+              {footerLegend || "LUGs App"}
+            </p>
           </div>
         </div>
       </main>
@@ -3105,16 +5744,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     if (activeSection === "lista_detalle" && !selectedListForItems) {
       return (
         <main className="bg-lego-tile min-h-screen">
-          <div className="flex min-h-screen items-center justify-center">
-            <p className="font-cubano-title text-3xl font-semibold text-white">Cargando lista...</p>
+          <div className="flex min-h-screen flex-col items-center justify-center">
+            <p className="font-cubano-title text-3xl font-semibold text-white">{labels.loadingList}</p>
+            <div className="mt-6 w-full px-4 text-center">
+              <p className="mx-auto inline-block px-4 py-1 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+                {footerLegend || "LUGs App"}
+              </p>
+            </div>
           </div>
         </main>
       );
     }
 
     if (activeSection === "lista_detalle" && selectedListForItems) {
-      const listTypeLabel = selectedListForItems.tipo === "deseos" ? "deseos" : "venta";
-      const visibilityLabel = selectedListForItems.visibilidad === "publico" ? "Publica" : "Privada";
+      const listTypeLabel = selectedListForItems.tipo === "deseos" ? labels.wishlistListType : labels.saleListType;
+      const visibilityLabel = selectedListForItems.visibilidad === "publico" ? labels.public : labels.private;
       const totalLotes = listItemsRows.length;
       const totalPiezas = listItemsRows.reduce((acc, row) => acc + Math.max(0, Number(row.quantity) || 0), 0);
 
@@ -3124,7 +5768,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{`Lista de ${listTypeLabel} ${selectedListForItems.nombre}`}</h2>
+                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{`${listTypeLabel} ${selectedListForItems.nombre}`}</h2>
                   <button
                     type="button"
                     onClick={() => {
@@ -3132,17 +5776,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
-                    Volver
+                    {labels.back}
                   </button>
                 </div>
                 <p className="mt-3 text-sm font-semibold text-slate-700">{visibilityLabel}</p>
-                <p className="mt-1 text-sm text-slate-600">{`Cantidad de lotes: ${totalLotes} - Cantidad de piezas: ${totalPiezas}`}</p>
+                <p className="mt-1 text-sm text-slate-600">{`${labels.listLotsCount}: ${totalLotes} - ${labels.listPiecesCount}: ${totalPiezas}`}</p>
                 <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
               </header>
 
               <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-3 sm:p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-boogaloo text-base font-semibold text-slate-900">Agregar item</p>
+                  <p className="font-boogaloo text-2xl font-semibold text-slate-900">{labels.addItem}</p>
                   <button
                     type="button"
                     onClick={() => {
@@ -3153,7 +5797,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
                   >
-                    Categorias
+                    {labels.categories}
                   </button>
                 </div>
 
@@ -3169,7 +5813,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         className="h-[72px] w-[72px] object-contain"
                       />
                     ) : (
-                      <span className="text-[11px] text-slate-400">Sin img</span>
+                      <span className="text-[11px] text-slate-400">{labels.noImage}</span>
                     )}
                     {showGenericColorImageWarning ? (
                       <span
@@ -3207,13 +5851,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         }
                       }}
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                      placeholder="Buscar pieza por nombre, codigo o #codigo"
+                      placeholder={labels.searchPlaceholder}
                     />
-                    {partsSearchLoading ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">Buscando...</span> : null}
+                    {partsSearchLoading ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">{labels.searching}</span> : null}
                     {showPartSearchDropdown ? (
                       <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-52 w-full overflow-auto rounded-md border border-slate-300 bg-white p-1 shadow-lg">
                         {partsSearchResults.length === 0 ? (
-                          <p className="px-2 py-1 text-xs text-slate-500">Sin resultados.</p>
+                          <p className="px-2 py-1 text-xs text-slate-500">{labels.noResults}</p>
                         ) : (
                           partsSearchResults.map((part) => (
                             <button
@@ -3253,7 +5897,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           className="h-3.5 w-3.5 rounded-sm border border-slate-300"
                           style={{ backgroundColor: selectedColorHex ? `#${selectedColorHex}` : "#ffffff" }}
                         />
-                        <span className="truncate">{addItemColorNameInput || "Seleccionar color"}</span>
+                        <span className="truncate">{addItemColorDisplayLabel}</span>
                       </button>
                       {showColorDropdown ? (
                         <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-52 w-full overflow-auto rounded-md border border-slate-300 bg-white p-1 shadow-lg">
@@ -3268,7 +5912,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-slate-100"
                           >
                             <span className="h-3.5 w-3.5 rounded-sm border border-slate-300 bg-white" />
-                            <span className="truncate">{NO_COLOR_LABEL}</span>
+                            <span className="truncate">{labels.noColor}</span>
                           </button>
                           {visibleColorOptions.map((option) => (
                             <button
@@ -3286,7 +5930,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                 style={{ backgroundColor: option.hex ? `#${option.hex}` : "#ffffff" }}
                               />
                               <span className="truncate">{option.label}</span>
-                              {!option.lego_available ? <span className="text-[10px] text-slate-500">(Color no LEGO)</span> : null}
+                              {!option.lego_available ? <span className="text-[10px] text-slate-500">{labels.notLegoColor}</span> : null}
                             </button>
                           ))}
                         </div>
@@ -3327,7 +5971,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         }}
                         className="h-3.5 w-3.5"
                       />
-                      <span>pieza en color existente</span>
+                      <span>{labels.existingColorPart}</span>
                     </label>
 
                     <div className="flex items-center overflow-hidden rounded-md border border-slate-300 bg-white">
@@ -3359,6 +6003,24 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   </div>
                 </div>
 
+                {selectedListForItems?.tipo === "venta" ? (
+                  <div className="mt-2 ml-[74px] sm:ml-[86px]">
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">{labels.price}</label>
+                    <div className="flex w-full max-w-[220px] items-center rounded-md border border-slate-300 bg-white px-2 py-1.5">
+                      <span className="text-sm font-semibold text-slate-700">$</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={addItemPriceInput}
+                        onChange={(event) => setAddItemPriceInput(event.target.value)}
+                        className="w-full bg-transparent px-2 text-sm outline-none"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="mt-3 flex justify-end">
                   <button
                     type="button"
@@ -3367,7 +6029,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     className="rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60"
                     style={{ backgroundColor: uiColor1, color: uiColor1Text }}
                   >
-                    Agregar item
+                    {labels.addItem}
                   </button>
                 </div>
 
@@ -3376,22 +6038,43 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               <div className="mt-3">
                 <button
                   type="button"
-                  onClick={() => setStatus("Exportar en preparación.")}
+                  onClick={() => void openPdfExportPrint()}
                   className="w-full rounded-md px-4 py-2 text-sm font-semibold"
                   style={{ backgroundColor: uiColor1, color: uiColor1Text }}
                 >
-                  Exportar
+                  {labels.exportPdf}
                 </button>
               </div>
 
               <div className="mt-3">
                 <div className="rounded-md border border-slate-200 p-2">
-                  <p className="font-boogaloo text-xs font-semibold uppercase tracking-wide text-slate-500">Ítems de la lista</p>
-                  <div className="mt-2 max-h-[340px] overflow-auto space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-boogaloo text-2xl font-semibold tracking-wide text-slate-900">{labels.itemsOfList}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setListItemsPage((prev) => Math.max(1, prev - 1))}
+                        disabled={listItemsCurrentPage <= 1}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs disabled:opacity-50"
+                      >
+                        ←
+                      </button>
+                      <p className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700">{`${listItemsCurrentPage} / ${listItemsMaxPage}`}</p>
+                      <button
+                        type="button"
+                        onClick={() => setListItemsPage((prev) => Math.min(listItemsMaxPage, prev + 1))}
+                        disabled={listItemsCurrentPage >= listItemsMaxPage}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs disabled:opacity-50"
+                      >
+                        →
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 space-y-2">
                     {listItemsRows.length === 0 ? (
-                      <p className="text-sm text-slate-500">Esta lista todavía no tiene piezas.</p>
+                      <p className="text-sm text-slate-500">{labels.listHasNoPartsYet}</p>
                     ) : (
-                      listItemsRows.map((row) => (
+                      listItemsVisibleRows.map((row) => (
                         <div key={row.item_id} className="rounded-md border border-slate-200 px-2 py-2">
                           <div className="flex items-start gap-2">
                             <div
@@ -3409,7 +6092,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   className="h-[56px] w-[56px] object-contain"
                                 />
                               ) : (
-                                <span className="text-[10px] text-slate-400">Sin img</span>
+                                <span className="text-[10px] text-slate-400">{labels.noImage}</span>
                               )}
                               {!row.imgmatchcolor ? (
                                 <span
@@ -3430,7 +6113,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
-                                <p className="truncate text-xs font-semibold text-slate-900">{`${row.part_num || "-"} - ${row.part_name || "Sin nombre"}`}</p>
+                                <p className="truncate text-xs font-semibold text-slate-900">{`${row.part_num || "-"} - ${row.part_name || labels.noNameFallback}`}</p>
                                 <button
                                   type="button"
                                   onClick={() => void deleteListItem(row.item_id)}
@@ -3473,6 +6156,70 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   }}
                                   className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs"
                                 />
+
+                                {selectedListForItems?.tipo === "venta" ? (
+                                  <div className="flex items-center overflow-hidden rounded-md border border-emerald-300 bg-emerald-50">
+                                    <span className="px-2 text-xs font-semibold text-emerald-800">$</span>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step="0.01"
+                                      value={itemPriceInputs[row.item_id] ?? (row.value == null ? "" : String(row.value))}
+                                      onChange={(event) => {
+                                        const raw = event.target.value;
+                                        setItemPriceInputs((prev) => ({ ...prev, [row.item_id]: raw }));
+                                      }}
+                                      onBlur={() => void saveListItemPrice(row.item_id)}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          void saveListItemPrice(row.item_id);
+                                        }
+                                      }}
+                                      className="w-20 border-l border-emerald-300 bg-transparent px-2 py-1 text-xs text-emerald-900 outline-none"
+                                      placeholder="0.00"
+                                    />
+                                  </div>
+                                ) : null}
+
+                                <div className="h-2 w-24 overflow-hidden rounded-full border border-slate-300 bg-slate-100">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                      width: `${Math.max(
+                                        0,
+                                        Math.min(
+                                          100,
+                                          Math.round(
+                                            ((listItemOffersById[row.item_id] ?? []).reduce((acc, offer) => acc + Math.max(1, offer.quantity), 0) /
+                                              Math.max(1, Number(row.quantity || 1))) *
+                                              100,
+                                          ),
+                                        ),
+                                      )}%`,
+                                      backgroundColor: currentLugColor2 || "#ffffff",
+                                    }}
+                                  />
+                                </div>
+
+                                {(listItemOffersById[row.item_id]?.length ?? 0) > 0 ? (
+                                  <div className="ml-auto flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const offers = listItemOffersById[row.item_id] ?? [];
+                                        setSelectedListItemOffers({
+                                          partLabel: `${row.part_num || "-"} - ${row.part_name || labels.noNameFallback}`,
+                                          requestedQuantity: Math.max(1, Number(row.quantity || 1)),
+                                          offers,
+                                        });
+                                      }}
+                                      className="rounded-md px-2 py-1 text-xs font-semibold"
+                                      style={{ backgroundColor: uiColor1, color: uiColor1Text }}
+                                    >
+                                      {labels.someoneOffersThisPart}
+                                    </button>
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           </div>
@@ -3484,6 +6231,54 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               </div>
             </div>
           </div>
+
+          {selectedListItemOffers ? (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setSelectedListItemOffers(null)}>
+              <div className="w-full max-w-md rounded-xl border border-slate-300 bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                {(() => {
+                  const offeredTotal = selectedListItemOffers.offers.reduce((acc, offer) => acc + Math.max(1, Number(offer.quantity || 1)), 0);
+                  const requested = Math.max(1, Number(selectedListItemOffers.requestedQuantity || 1));
+                  const progress = Math.max(0, Math.min(100, Math.round((offeredTotal / requested) * 100)));
+                  const isComplete = progress >= 100;
+
+                  return (
+                    <>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-boogaloo text-xl text-slate-900">{labels.someoneOffersThisPart}</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedListItemOffers(null)}
+                    className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                  >
+                    {labels.close}
+                  </button>
+                </div>
+                <p className="mt-2 text-sm font-semibold text-slate-800">{selectedListItemOffers.partLabel}</p>
+                <div className="mt-3 space-y-2">
+                  {selectedListItemOffers.offers.map((offer) => (
+                    <p key={offer.offer_id} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                      {labels.offerLine(offer.requester_name, offer.quantity)}
+                    </p>
+                  ))}
+                </div>
+                {!isComplete ? (
+                  <div className="mt-3 w-full overflow-hidden rounded-md border border-slate-300 bg-slate-100">
+                    <div
+                      className="h-3 rounded-md"
+                      style={{ width: `${progress}%`, backgroundColor: currentLugColor2 || "#ffffff" }}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-3 flex justify-center">
+                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-600 text-2xl font-bold text-white">✓</span>
+                  </div>
+                )}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          ) : null}
 
           {showCategoriesPanel ? (
             <div
@@ -3507,7 +6302,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             setSelectedPanelCategory(null);
                           }}
                           className="rounded-md border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-700"
-                          title="Volver a categorías"
+                          title={labels.backToCategories}
                         >
                           ←
                         </button>
@@ -3521,7 +6316,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             panelPrintFilters.no_printed ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                           }`}
                         >
-                          No impresas
+                          {labels.notPrinted}
                         </button>
                         <button
                           type="button"
@@ -3530,7 +6325,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             panelPrintFilters.printed ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                           }`}
                         >
-                          Impresas
+                          {labels.printed}
                         </button>
                       </div>
                     </div>
@@ -3571,14 +6366,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         }}
                         className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
                       >
-                        Cerrar
+                        {labels.close}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-boogaloo text-2xl text-slate-900">Catalogo</p>
+                      <p className="font-boogaloo text-2xl text-slate-900">{labels.catalog}</p>
                       <button
                         type="button"
                         onClick={() => setCategoryQuickFilter("all")}
@@ -3586,7 +6381,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           categoryQuickFilter === "all" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                         }`}
                       >
-                        All
+                        {labels.filterAll}
                       </button>
                       <button
                         type="button"
@@ -3595,7 +6390,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           categoryQuickFilter === "popular" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                         }`}
                       >
-                        Popular
+                        {labels.filterPopular}
                       </button>
                       <button
                         type="button"
@@ -3622,7 +6417,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           categoryQuickFilter === "otros" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                         }`}
                       >
-                        Otros
+                        {labels.filterOthers}
                       </button>
                     </div>
                     <button
@@ -3635,7 +6430,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       }}
                       className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
                     >
-                      Cerrar
+                      {labels.close}
                     </button>
                   </div>
                 )}
@@ -3644,9 +6439,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   <>
                     <div className="mt-3 rounded-md border border-slate-300 p-2">
                       {panelPartsLoading ? (
-                        <p className="px-2 py-3 text-sm text-slate-500">Cargando piezas...</p>
+                        <p className="px-2 py-3 text-sm text-slate-500">{labels.loadingParts}</p>
                       ) : panelFilteredParts.length === 0 ? (
-                        <p className="px-2 py-3 text-sm text-slate-500">Sin piezas para mostrar.</p>
+                        <p className="px-2 py-3 text-sm text-slate-500">{labels.noPartsToShow}</p>
                       ) : (
                         <div className="grid grid-cols-5 gap-2">
                           {panelVisibleParts.map((part) => (
@@ -3657,7 +6452,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                               className={`cursor-pointer rounded-md border p-2 hover:bg-slate-50 ${
                                 selectedPanelPartNum === part.part_num ? "border-slate-900 bg-slate-50" : "border-slate-200"
                               }`}
-                              title="Doble clic para agregar"
+                              title={labels.doubleClickSelect}
                             >
                               <div className="mx-auto h-16 w-16 overflow-hidden rounded border border-slate-200 bg-slate-50">
                                 {part.part_img_url ? (
@@ -3699,7 +6494,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 ) : (
                   <div className="mt-3 max-h-[520px] overflow-auto rounded-md border border-slate-300 p-2">
                     {filteredCategories.length === 0 ? (
-                      <p className="px-2 py-2 text-sm text-slate-500">No hay categorias para mostrar. Primero hay que sincronizar el catalogo.</p>
+                      <p className="px-2 py-2 text-sm text-slate-500">{labels.noCategoriesToShow}</p>
                     ) : (
                       <div className="space-y-2">
                         {filteredCategories.map((cat) => (
@@ -3739,14 +6534,38 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       );
     }
 
-    if (activeSection === "listas") {
+    if (activeSection === "mi_lug") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
           <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">Listas</h2>
+                  <div className="flex items-center gap-3">
+                    {(miLugHeaderLogo || currentLugLogoDataUrl || currentUserLug?.logo_data_url) ? (
+                      <Image
+                        src={miLugHeaderLogo || currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
+                        alt={currentUserLug?.nombre || "Logo LUG"}
+                        width={56}
+                        height={56}
+                        unoptimized
+                        className="h-14 w-14 object-contain"
+                      />
+                    ) : null}
+                    <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{currentLugDisplayName}</h2>
+                    <button
+                      type="button"
+                      onClick={() => void openMiLugMembersPanel()}
+                      className="rounded-md border px-3 py-1 text-xs font-semibold"
+                      style={{
+                        backgroundColor: currentLugColor1 || "#006eb2",
+                        color: getContrastTextColor(currentLugColor1 || "#006eb2"),
+                        borderColor: currentLugColor3 || "#111111",
+                      }}
+                    >
+                      {labels.members}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -3755,7 +6574,1075 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
-                    Volver
+                    {labels.back}
+                  </button>
+                </div>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+              </header>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void openOffersGivenPanel()}
+                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                >
+                  {labels.offeredToOthers}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void openOffersReceivedPanel()}
+                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                >
+                  {labels.offeredToMe}
+                </button>
+              </div>
+
+              <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMiLugExpandedPool((prev) => (prev === "wishlist" ? null : "wishlist"))}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-base font-semibold text-slate-700"
+                      title={miLugExpandedPool === "wishlist" ? "Minimizar" : "Maximizar"}
+                      aria-label={miLugExpandedPool === "wishlist" ? "Minimizar pool de wishlist" : "Maximizar pool de wishlist"}
+                    >
+                      {miLugExpandedPool === "wishlist" ? "▾" : "▸"}
+                    </button>
+                  <p className="font-boogaloo text-lg text-slate-900">{labels.poolWishlist}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={miLugWishlistSort}
+                      onChange={(event) => {
+                        setMiLugWishlistSort(event.target.value as "codigo" | "color" | "usuario");
+                        setMiLugWishlistPage(1);
+                      }}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
+                    >
+                      <option value="codigo">{labels.sortCode}</option>
+                      <option value="color">{labels.sortColor}</option>
+                      <option value="usuario">{labels.sortUser}</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setMiLugWishlistPage((prev) => Math.max(1, prev - 1))}
+                      disabled={miLugWishlistCurrentPage <= 1}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      ←
+                    </button>
+                    <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugWishlistCurrentPage} / ${miLugWishlistMaxPage}`}</p>
+                    <button
+                      type="button"
+                      onClick={() => setMiLugWishlistPage((prev) => Math.min(miLugWishlistMaxPage, prev + 1))}
+                      disabled={miLugWishlistCurrentPage >= miLugWishlistMaxPage}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      →
+                    </button>
+                  </div>
+                </div>
+                {miLugExpandedPool === "wishlist" ? (
+                  <div className="mt-3 grid grid-cols-6 gap-2">
+                    {miLugPoolWishlistItems.length === 0 ? (
+                      <p className="col-span-6 text-sm text-slate-500">{labels.noPublicWishlist}</p>
+                    ) : (
+                      miLugWishlistVisibleItems.map((item) => (
+                        <button
+                          key={`wish-${item.id}`}
+                          type="button"
+                          onClick={() => setSelectedMiLugPoolItem({ type: "wishlist", item })}
+                          className="rounded-md border border-slate-300 bg-white p-2 text-center"
+                        >
+                          <div className="mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50">
+                            {item.part_img_url ? (
+                              <Image
+                                src={item.part_img_url}
+                                alt={item.part_name}
+                                width={56}
+                                height={56}
+                                unoptimized
+                                className="h-[56px] w-[56px] object-contain"
+                              />
+                            ) : null}
+                          </div>
+                          <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
+                          <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
+                          <p className="font-boogaloo text-xl leading-none text-slate-900">{item.remaining_quantity}</p>
+                          {item.current_user_offer_quantity > 0 ? (
+                            <p className="text-[10px] font-semibold text-emerald-700">{`Yo ofrecí ${item.current_user_offer_quantity}`}</p>
+                          ) : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="mt-3 rounded-xl border border-slate-300 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMiLugExpandedPool((prev) => (prev === "venta" ? null : "venta"))}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-base font-semibold text-slate-700"
+                      title={miLugExpandedPool === "venta" ? "Minimizar" : "Maximizar"}
+                      aria-label={miLugExpandedPool === "venta" ? "Minimizar pool de ventas" : "Maximizar pool de ventas"}
+                    >
+                      {miLugExpandedPool === "venta" ? "▾" : "▸"}
+                    </button>
+                  <p className="font-boogaloo text-lg text-slate-900">{labels.poolSales}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={miLugSaleSort}
+                      onChange={(event) => {
+                        setMiLugSaleSort(event.target.value as "codigo" | "color" | "usuario" | "price_asc" | "price_desc");
+                        setMiLugSalePage(1);
+                      }}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
+                    >
+                      <option value="codigo">{labels.sortCode}</option>
+                      <option value="color">{labels.sortColor}</option>
+                      <option value="usuario">{labels.sortUser}</option>
+                      <option value="price_asc">{labels.sortPriceAsc}</option>
+                      <option value="price_desc">{labels.sortPriceDesc}</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setMiLugSalePage((prev) => Math.max(1, prev - 1))}
+                      disabled={miLugSaleCurrentPage <= 1}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      ←
+                    </button>
+                    <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugSaleCurrentPage} / ${miLugSaleMaxPage}`}</p>
+                    <button
+                      type="button"
+                      onClick={() => setMiLugSalePage((prev) => Math.min(miLugSaleMaxPage, prev + 1))}
+                      disabled={miLugSaleCurrentPage >= miLugSaleMaxPage}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      →
+                    </button>
+                  </div>
+                </div>
+                {miLugExpandedPool === "venta" ? (
+                  <div className="mt-3 grid grid-cols-6 gap-2">
+                    {miLugPoolSaleItems.length === 0 ? (
+                      <p className="col-span-6 text-sm text-slate-500">{labels.noPublicSales}</p>
+                    ) : (
+                      miLugSaleVisibleItems.map((item) => (
+                        <button
+                          key={`sale-${item.id}`}
+                          type="button"
+                          onClick={() => setSelectedMiLugPoolItem({ type: "venta", item })}
+                          className="rounded-md border border-slate-300 bg-white p-2 text-center"
+                        >
+                          <p className="mb-1 font-boogaloo text-xl leading-none text-emerald-700">{item.value == null ? "$-" : `$${item.value}`}</p>
+                          <div className="mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50">
+                            {item.part_img_url ? (
+                              <Image
+                                src={item.part_img_url}
+                                alt={item.part_name}
+                                width={56}
+                                height={56}
+                                unoptimized
+                                className="h-[56px] w-[56px] object-contain"
+                              />
+                            ) : null}
+                          </div>
+                          <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
+                          <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
+                          <p className="font-boogaloo text-xl leading-none text-slate-900">{item.quantity}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </section>
+
+              {showMiLugMembersPanel ? (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowMiLugMembersPanel(false)}>
+                  <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-boogaloo text-2xl text-slate-900">{labels.members}</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowMiLugMembersPanel(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        {labels.close}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 max-h-[420px] space-y-2 overflow-auto">
+                      {miLugMembersLoading ? (
+                        <p className="text-sm text-slate-600">{labels.loadingMembers}</p>
+                      ) : miLugMembersRows.length === 0 ? (
+                        <p className="text-sm text-slate-500">{labels.noMembers}</p>
+                      ) : (
+                        miLugMembersRows.map((member) => {
+                          const social = getSocialPlatformLabel(member.social_platform);
+                          const socialUrl = buildSocialUrl(member.social_platform, member.social_handle);
+                          const socialLabel = member.social_handle || labels.noSocial;
+
+                          return (
+                            <div key={member.id} className="rounded-md border border-slate-200 px-3 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{member.full_name}</p>
+                                  {member.rol_lug === "admin" ? (
+                                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                                      Admin
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {rolLug === "admin" && member.rol_lug !== "admin" && member.id !== userId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void promoteMiLugMemberToAdmin(member.id, member.full_name)}
+                                    disabled={promoteMemberLoadingId === member.id}
+                                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                    style={{
+                                      backgroundColor: currentLugColor2 || "#ffffff",
+                                      color: getContrastTextColor(currentLugColor2 || "#ffffff"),
+                                      borderColor: currentLugColor3 || "#111111",
+                                    }}
+                                  >
+                                    {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 flex items-center gap-2">
+                                <span
+                                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                                  style={{ backgroundColor: social.bg }}
+                                  title={member.social_platform || "Red social"}
+                                >
+                                  {social.logo}
+                                </span>
+                                {socialUrl ? (
+                                  <a href={socialUrl} target="_blank" rel="noreferrer" className="truncate text-xs font-semibold text-sky-700 hover:underline">
+                                    {socialUrl}
+                                  </a>
+                                ) : (
+                                  <p className="truncate text-xs text-slate-600">{socialLabel}</p>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showOffersGivenPanel ? (
+                <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowOffersGivenPanel(false)}>
+                  <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <p className="font-boogaloo text-xl text-slate-900">{labels.offeredToOthers}</p>
+                        <button
+                          type="button"
+                          onClick={() => printOffersSummary(labels.offeredToOthers, offersGivenRows)}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                        >
+                          Print
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowOffersGivenPanel(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                    <div className="mt-3 max-h-[360px] overflow-auto space-y-2">
+                      {offersPanelsLoading ? (
+                        <p className="text-sm text-slate-500">{labels.loading}</p>
+                      ) : offersGivenRows.length === 0 ? (
+                        <p className="text-sm text-slate-500">{labels.noOffersRegistered}</p>
+                      ) : (
+                        offersGivenRows.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
+                              <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
+                            </div>
+                            <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showOffersReceivedPanel ? (
+                <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowOffersReceivedPanel(false)}>
+                  <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <p className="font-boogaloo text-xl text-slate-900">{labels.offeredToMe}</p>
+                        <button
+                          type="button"
+                          onClick={() => printOffersSummary(labels.offeredToMe, offersReceivedRows)}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                        >
+                          Print
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowOffersReceivedPanel(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                    <div className="mt-3 max-h-[360px] overflow-auto space-y-2">
+                      {offersPanelsLoading ? (
+                        <p className="text-sm text-slate-500">{labels.loading}</p>
+                      ) : offersReceivedRows.length === 0 ? (
+                        <p className="text-sm text-slate-500">{labels.noOffersReceived}</p>
+                      ) : (
+                        offersReceivedRows.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
+                              <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
+                            </div>
+                            <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedMiLugPoolItem ? (
+                <div
+                  className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/55 p-4"
+                  onClick={() => setSelectedMiLugPoolItem(null)}
+                >
+                  <div
+                    className="w-full max-w-md rounded-xl border border-slate-300 bg-white p-5 shadow-xl"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-boogaloo text-2xl text-slate-900">
+                        {selectedMiLugPoolItem.type === "venta" ? labels.detailSale : labels.detailWishlist}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMiLugPoolItem(null)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+
+                    <div className="mt-4 flex items-start gap-3">
+                      <div className="flex h-[110px] w-[110px] items-center justify-center overflow-hidden rounded-md border border-slate-300 bg-slate-50">
+                        {selectedMiLugPoolItem.item.part_img_url ? (
+                          <Image
+                            src={selectedMiLugPoolItem.item.part_img_url}
+                            alt={selectedMiLugPoolItem.item.part_name}
+                            width={96}
+                            height={96}
+                            unoptimized
+                            className="h-[96px] w-[96px] object-contain"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <p className="text-base font-semibold text-slate-900">{`${selectedMiLugPoolItem.item.part_num} - ${selectedMiLugPoolItem.item.part_name}`}</p>
+                        <p className="text-sm text-slate-700">{`${labels.quantityWord}: ${selectedMiLugPoolItem.item.quantity}`}</p>
+                        <p className="text-sm text-slate-700">{`${labels.publishedByWord}: ${selectedMiLugPoolItem.item.publisher_name}`}</p>
+
+                        {selectedMiLugPoolItem.type === "wishlist" && selectedMiLugPoolItem.item.publisher_id !== userId ? (
+                          <div className="mt-2 flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              value={miLugOfferQuantityInput}
+                              onChange={(event) => setMiLugOfferQuantityInput(event.target.value)}
+                              className="w-24 rounded-md border border-slate-300 px-2 py-1 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void submitWishlistOfferFromPool()}
+                              className="rounded-md px-3 py-1 text-sm font-semibold"
+                              style={{ backgroundColor: uiColor1, color: uiColor1Text }}
+                            >
+                              {labels.iHave}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-2 w-full px-2 text-center">
+            <p className="mx-auto inline-block px-2 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+              {footerLegend || "LUGs App"}
+            </p>
+          </div>
+        </main>
+      );
+    }
+
+    if (activeSection === "minifiguras") {
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="mx-auto w-full max-w-[980px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <h2 className="font-boogaloo text-3xl font-normal text-slate-900">{labels.minifigSectionTitle}</h2>
+                    <div className="text-sm font-normal leading-5 text-slate-700">
+                      <p>{`Completas: ${minifigGlobalOwnedStats.complete}`}</p>
+                      <p>{`Con Faltantes: ${minifigGlobalOwnedStats.missing}`}</p>
+                      <p>{`Tengo en Total: ${minifigGlobalOwnedStats.total}`}</p>
+                      <p>{`Favoritas: ${minifigGlobalOwnedStats.favorites}`}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {labels.back}
+                  </button>
+                </div>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+              </header>
+
+              <section className="mt-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMinifigSeriesPopup(true)}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+                  >
+                    Collectable Series
+                  </button>
+                  <input
+                    type="text"
+                    value={minifigSearchQuery}
+                    onChange={(event) => setMinifigSearchQuery(event.target.value)}
+                    placeholder="Buscar minifigura"
+                    className="h-10 min-w-[240px] flex-1 rounded-md border border-slate-300 px-3 text-sm text-slate-800"
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinifigFiguresFilter("all");
+                      setShowOnlyFavoriteFigures(false);
+                      void saveMinifigUiPreferences({ show_only_favorite_figures: false });
+                    }}
+                    className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                      minifigFiguresFilter === "all" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-800"
+                    }`}
+                  >
+                    Todas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinifigFiguresFilter("missing");
+                      setShowOnlyFavoriteFigures(false);
+                      void saveMinifigUiPreferences({ show_only_favorite_figures: false });
+                    }}
+                    className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                      minifigFiguresFilter === "missing" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-800"
+                    }`}
+                  >
+                    Solo con faltantes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinifigFiguresFilter("complete");
+                      setShowOnlyFavoriteFigures(false);
+                      void saveMinifigUiPreferences({ show_only_favorite_figures: false });
+                    }}
+                    className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                      minifigFiguresFilter === "complete" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-800"
+                    }`}
+                  >
+                    Solo completas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinifigFiguresFilter("favorite");
+                      setShowOnlyFavoriteFigures(true);
+                      void saveMinifigUiPreferences({ show_only_favorite_figures: true });
+                    }}
+                    className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                      minifigFiguresFilter === "favorite" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-800"
+                    }`}
+                  >
+                    Favoritas
+                  </button>
+                </div>
+
+                <div className="mt-3 rounded-xl border border-slate-300 bg-slate-50 p-4">
+                  {minifigSearchQuery.trim().length > 0 ? (
+                    minifigSearchLoading ? (
+                      <p className="text-sm text-slate-500">{labels.loadingSeriesItems}</p>
+                    ) : minifigSearchResults.length === 0 ? (
+                      <p className="text-sm text-slate-500">{labels.noSeriesItems}</p>
+                    ) : (
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+                        {minifigSearchResults.map((fig) => {
+                          const hasMissingParts = Boolean(minifigSetHasMissingPartsBySetNum[fig.set_num]);
+                          const isOwned = Boolean(minifigFigureCheckedBySetNum[fig.set_num]);
+                          const missingRows = minifigMissingPartsPreviewBySetNum[fig.set_num] ?? [];
+                          const missingRowsToShow = missingRows.slice(0, 3);
+                          const missingRowsHiddenCount = Math.max(0, missingRows.length - missingRowsToShow.length);
+                          const missingRowsLoading = Boolean(minifigMissingPartsPreviewLoadingBySetNum[fig.set_num]);
+                          const figureImageScaleClass = hasMissingParts ? "h-[80%] w-[80%]" : "h-[88%] w-[88%]";
+
+                          const backgroundColor = hasMissingParts
+                            ? currentLugColor2 || "#ffffff"
+                            : isOwned
+                              ? currentLugColor1 || "#006eb2"
+                              : "#ffffff";
+                          const textColor = getContrastTextColor(backgroundColor);
+
+                          return (
+                            <div
+                              key={`search-${fig.set_num}`}
+                              className="rounded-md border p-2"
+                              style={{
+                                borderColor: currentLugColor3 || "#cbd5e1",
+                                backgroundColor,
+                                color: textColor,
+                              }}
+                            >
+                              <div
+                                className="relative mx-auto w-full max-w-[180px]"
+                                onDoubleClick={() => setSelectedMinifigForImagePopup(fig)}
+                              >
+                                <div
+                                  className="flex aspect-square w-full items-center justify-center overflow-hidden rounded border border-slate-200 bg-white"
+                                >
+                                  {fig.set_img_url ? (
+                                    <Image
+                                      src={fig.set_img_url}
+                                      alt={fig.name}
+                                      width={220}
+                                      height={220}
+                                      unoptimized
+                                      className={`object-contain ${figureImageScaleClass}`}
+                                    />
+                                  ) : null}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const nextFavorite = !minifigFigureFavoriteBySetNum[fig.set_num];
+                                    setMinifigFigureFavoriteBySetNum((prev) => ({
+                                      ...prev,
+                                      [fig.set_num]: nextFavorite,
+                                    }));
+                                    void saveMinifigSetFavoriteState(fig.set_num, nextFavorite);
+                                  }}
+                                  className="absolute right-1 top-1 text-2xl leading-none"
+                                  style={{ color: minifigFigureFavoriteBySetNum[fig.set_num] ? "#111111" : "#94a3b8" }}
+                                >
+                                  {minifigFigureFavoriteBySetNum[fig.set_num] ? "★" : "☆"}
+                                </button>
+                              </div>
+                              <p className="mt-1 truncate text-[12px] font-semibold">{fig.name}</p>
+                              <div className="mt-1 flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(minifigFigureCheckedBySetNum[fig.set_num])}
+                                  onChange={(event) => {
+                                    const nextChecked = event.target.checked;
+                                    setMinifigFigureCheckedBySetNum((prev) => ({
+                                      ...prev,
+                                      [fig.set_num]: nextChecked,
+                                    }));
+                                    void saveMinifigSetOwnedState(fig.set_num, nextChecked);
+                                  }}
+                                  className="h-6 w-6 rounded border-slate-300 text-emerald-700"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => void openMinifigFigureParts(fig)}
+                                  className="rounded-md border px-2 py-0.5 text-[10px] font-semibold"
+                                  style={{ borderColor: currentLugColor3 || "#94a3b8", color: "inherit" }}
+                                >
+                                  PARTS
+                                </button>
+                              </div>
+                              {hasMissingParts ? (
+                                <div className="mt-2 flex items-center gap-1">
+                                  {missingRowsLoading && missingRows.length === 0
+                                    ? Array.from({ length: 3 }).map((_, index) => (
+                                        <div
+                                          key={`${fig.set_num}-missing-loading-${index}`}
+                                          className="h-[40px] w-[40px] animate-pulse rounded border border-white/60 bg-white/40"
+                                        />
+                                      ))
+                                    : missingRowsToShow.map((part, index) => (
+                                        <div
+                                          key={`${fig.set_num}-missing-${part.row_id}-${index}`}
+                                          className="flex h-[40px] w-[40px] items-center justify-center overflow-hidden rounded border border-white/60 bg-white/85"
+                                        >
+                                          {part.part_img_url ? (
+                                            <Image
+                                              src={part.part_img_url}
+                                              alt={part.part_name || part.part_num}
+                                              width={36}
+                                              height={36}
+                                              unoptimized
+                                              className="h-[36px] w-[36px] object-contain"
+                                            />
+                                          ) : (
+                                            <span className="text-[9px] font-semibold text-slate-700">{part.part_num}</span>
+                                          )}
+                                        </div>
+                                      ))}
+                                  {missingRowsHiddenCount > 0 ? (
+                                    <span className="ml-1 text-[10px] font-semibold" style={{ color: textColor }}>
+                                      +{missingRowsHiddenCount}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : checkedMinifigSeriesIds.length === 0 ? (
+                    <p className="text-sm text-slate-500">{labels.selectSeriesHint}</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {checkedMinifigSeriesIds.map((seriesId) => {
+                        const figures = minifigFiguresBySeriesId[seriesId] ?? [];
+                        const loading = Boolean(minifigFiguresLoadingBySeriesId[seriesId]);
+                        const visibleFigures = figures.filter((fig) => {
+                          const hasMissingParts = Boolean(minifigSetHasMissingPartsBySetNum[fig.set_num]);
+                          const isFavorite = Boolean(minifigFigureFavoriteBySetNum[fig.set_num]);
+                          const isOwned = Boolean(minifigFigureCheckedBySetNum[fig.set_num]);
+
+                          if (minifigFiguresFilter === "missing") {
+                            return hasMissingParts;
+                          }
+                          if (minifigFiguresFilter === "complete") {
+                            return isOwned && !hasMissingParts;
+                          }
+                          if (minifigFiguresFilter === "favorite") {
+                            return isFavorite;
+                          }
+                          return true;
+                        });
+
+                        return (
+                          <div key={`series-items-${seriesId}`}>
+                            {loading ? <p className="mt-1 text-sm text-slate-500">{labels.loadingSeriesItems}</p> : null}
+                            {!loading && visibleFigures.length === 0 ? <p className="mt-1 text-sm text-slate-500">{labels.noSeriesItems}</p> : null}
+                            {!loading && visibleFigures.length > 0 ? (
+                              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+                                {visibleFigures.map((fig) => {
+                                  const hasMissingParts = Boolean(minifigSetHasMissingPartsBySetNum[fig.set_num]);
+                                  const isOwned = Boolean(minifigFigureCheckedBySetNum[fig.set_num]);
+                                  const missingRows = minifigMissingPartsPreviewBySetNum[fig.set_num] ?? [];
+                                  const missingRowsToShow = missingRows.slice(0, 3);
+                                  const missingRowsHiddenCount = Math.max(0, missingRows.length - missingRowsToShow.length);
+                                  const missingRowsLoading = Boolean(minifigMissingPartsPreviewLoadingBySetNum[fig.set_num]);
+                                  const figureImageScaleClass = hasMissingParts ? "h-[80%] w-[80%]" : "h-[88%] w-[88%]";
+
+                                  const backgroundColor = hasMissingParts
+                                    ? currentLugColor2 || "#ffffff"
+                                    : isOwned
+                                      ? currentLugColor1 || "#006eb2"
+                                      : "#ffffff";
+                                  const textColor = getContrastTextColor(backgroundColor);
+
+                                  return (
+                                    <div
+                                      key={`${seriesId}-${fig.set_num}`}
+                                      className="rounded-md border p-2"
+                                      style={{
+                                        borderColor: currentLugColor3 || "#cbd5e1",
+                                        backgroundColor,
+                                        color: textColor,
+                                      }}
+                                    >
+                                      <div
+                                        className="relative mx-auto w-full max-w-[180px]"
+                                        onDoubleClick={() => setSelectedMinifigForImagePopup(fig)}
+                                      >
+                                        <div
+                                          className="flex aspect-square w-full items-center justify-center overflow-hidden rounded border border-slate-200 bg-white"
+                                        >
+                                          {fig.set_img_url ? (
+                                            <Image
+                                              src={fig.set_img_url}
+                                              alt={fig.name}
+                                              width={220}
+                                              height={220}
+                                              unoptimized
+                                              className={`object-contain ${figureImageScaleClass}`}
+                                            />
+                                          ) : null}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            const nextFavorite = !minifigFigureFavoriteBySetNum[fig.set_num];
+                                            setMinifigFigureFavoriteBySetNum((prev) => ({
+                                              ...prev,
+                                              [fig.set_num]: nextFavorite,
+                                            }));
+                                            void saveMinifigSetFavoriteState(fig.set_num, nextFavorite);
+                                          }}
+                                          className="absolute right-1 top-1 text-2xl leading-none"
+                                          style={{ color: minifigFigureFavoriteBySetNum[fig.set_num] ? "#111111" : "#94a3b8" }}
+                                        >
+                                          {minifigFigureFavoriteBySetNum[fig.set_num] ? "★" : "☆"}
+                                        </button>
+                                      </div>
+                                      <p className="mt-1 truncate text-[12px] font-semibold">{fig.name}</p>
+                                      <div className="mt-1 flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(minifigFigureCheckedBySetNum[fig.set_num])}
+                                          onChange={(event) => {
+                                            const nextChecked = event.target.checked;
+                                            setMinifigFigureCheckedBySetNum((prev) => ({
+                                              ...prev,
+                                              [fig.set_num]: nextChecked,
+                                            }));
+                                            void saveMinifigSetOwnedState(fig.set_num, nextChecked);
+                                          }}
+                                          className="h-6 w-6 rounded border-slate-300 text-emerald-700"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => void openMinifigFigureParts(fig)}
+                                          className="rounded-md border px-2 py-0.5 text-[10px] font-semibold"
+                                          style={{ borderColor: currentLugColor3 || "#94a3b8", color: "inherit" }}
+                                        >
+                                          PARTS
+                                        </button>
+                                      </div>
+                                      {hasMissingParts ? (
+                                        <div className="mt-2 flex items-center gap-1">
+                                          {missingRowsLoading && missingRows.length === 0
+                                            ? Array.from({ length: 3 }).map((_, index) => (
+                                                <div
+                                                  key={`${fig.set_num}-missing-loading-${index}`}
+                                                  className="h-[40px] w-[40px] animate-pulse rounded border border-white/60 bg-white/40"
+                                                />
+                                              ))
+                                            : missingRowsToShow.map((part, index) => (
+                                                <div
+                                                  key={`${fig.set_num}-missing-${part.row_id}-${index}`}
+                                                  className="flex h-[40px] w-[40px] items-center justify-center overflow-hidden rounded border border-white/60 bg-white/85"
+                                                >
+                                                  {part.part_img_url ? (
+                                                    <Image
+                                                      src={part.part_img_url}
+                                                      alt={part.part_name || part.part_num}
+                                                      width={36}
+                                                      height={36}
+                                                      unoptimized
+                                                      className="h-[36px] w-[36px] object-contain"
+                                                    />
+                                                  ) : (
+                                                    <span className="text-[9px] font-semibold text-slate-700">{part.part_num}</span>
+                                                  )}
+                                                </div>
+                                              ))}
+                                          {missingRowsHiddenCount > 0 ? (
+                                            <span className="ml-1 text-[10px] font-semibold" style={{ color: textColor }}>
+                                              +{missingRowsHiddenCount}
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              {showMinifigSeriesPopup ? (
+                <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowMinifigSeriesPopup(false)}>
+                  <div className="w-full max-w-[520px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <p className="font-boogaloo text-2xl text-slate-900">Collectable Series</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextValue = !showOnlyFavoriteSeries;
+                            setShowOnlyFavoriteSeries(nextValue);
+                            void saveMinifigUiPreferences({ show_only_favorite_series: nextValue });
+                          }}
+                          className={`rounded-md border px-3 py-1 text-sm font-semibold ${
+                            showOnlyFavoriteSeries ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                          }`}
+                        >
+                          Favoriotas
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowMinifigSeriesPopup(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        {labels.close}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 max-h-[520px] space-y-2 overflow-auto pr-1">
+                      {minifigSeriesLoading ? (
+                        <p className="text-sm text-slate-600">{labels.loadingSeries}</p>
+                      ) : (showOnlyFavoriteSeries
+                          ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id]))
+                          : minifigSeriesRows
+                        ).length === 0 ? (
+                        <p className="text-sm text-slate-500">{labels.noSeriesFound}</p>
+                      ) : (
+                        (showOnlyFavoriteSeries
+                          ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id]))
+                          : minifigSeriesRows
+                        ).map((series) => (
+                          <label key={`series-popup-${series.id}`} className="flex cursor-pointer items-start gap-2 px-1 py-1">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(minifigSeriesCheckedById[series.id])}
+                              onChange={(event) => {
+                                const nextChecked = event.target.checked;
+                                setMinifigSeriesCheckedById((prev) => ({
+                                  ...prev,
+                                  [series.id]: nextChecked,
+                                }));
+                                void saveMinifigSeriesPreference(series.id, { is_selected: nextChecked });
+                                if (nextChecked) {
+                                  void loadMinifigFiguresForSeries(series.id);
+                                }
+                              }}
+                              className="mt-[2px] h-4 w-4 rounded border-slate-300 text-emerald-700"
+                            />
+                            <span className="text-sm font-semibold text-slate-800">{`${series.name} (${series.year_from ?? "-"})`}</span>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const nextFavorite = !minifigSeriesFavoriteById[series.id];
+                                setMinifigSeriesFavoriteById((prev) => ({
+                                  ...prev,
+                                  [series.id]: nextFavorite,
+                                }));
+                                void saveMinifigSeriesPreference(series.id, { is_favorite: nextFavorite });
+                              }}
+                              className="text-2xl leading-none"
+                              style={{ color: minifigSeriesFavoriteById[series.id] ? currentLugColor1 || "#006eb2" : "#94a3b8" }}
+                              aria-label="Toggle favorite"
+                            >
+                              {minifigSeriesFavoriteById[series.id] ? "♥" : "♡"}
+                            </button>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showMinifigPartsPopup ? (
+                <div
+                  className="fixed inset-0 z-[66] flex items-center justify-center bg-slate-900/45 p-4"
+                  onClick={() => setShowMinifigPartsPopup(false)}
+                >
+                  <div className="w-full max-w-[760px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-boogaloo text-2xl text-slate-900">{selectedMinifigForParts?.name || "PARTS"}</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowMinifigPartsPopup(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        {labels.close}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 max-h-[520px] overflow-auto">
+                      {minifigPartsLoading ? (
+                        <p className="text-sm text-slate-600">{labels.loadingFigureParts}</p>
+                      ) : minifigPartsRows.length === 0 ? (
+                        <p className="text-sm text-slate-500">{labels.noFigureParts}</p>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                          {minifigPartsRows.map((part) => (
+                            <div
+                              key={part.row_id}
+                              className={`rounded-md border p-2 ${
+                                minifigPartCheckedByRowId[part.row_id] === false
+                                  ? "border-red-300 bg-red-50"
+                                  : "border-slate-200 bg-slate-50"
+                              }`}
+                            >
+                              <div className="mb-1 flex items-center justify-start">
+                                <input
+                                  type="checkbox"
+                                  checked={minifigPartCheckedByRowId[part.row_id] !== false}
+                                  onChange={(event) => {
+                                    const nextChecked = event.target.checked;
+                                    const nextMap = {
+                                      ...minifigPartCheckedByRowId,
+                                      [part.row_id]: nextChecked,
+                                    };
+                                    setMinifigPartCheckedByRowId(nextMap);
+
+                                    const setNum = selectedMinifigForParts?.set_num;
+                                    if (!setNum) {
+                                      return;
+                                    }
+
+                                    setMinifigSetHasMissingPartsBySetNum((prev) => ({
+                                      ...prev,
+                                      [setNum]: Object.values(nextMap).some((checked) => !checked),
+                                    }));
+                                    setMinifigMissingPartsPreviewBySetNum((prev) => ({
+                                      ...prev,
+                                      [setNum]: getMissingMinifigPartRows(minifigPartsRows, nextMap),
+                                    }));
+
+                                    void saveMinifigPartsInventoryState(setNum, nextMap);
+                                  }}
+                                  className="h-5 w-5 rounded border-slate-300 text-emerald-700"
+                                />
+                              </div>
+                              <div className="mx-auto flex h-[84px] w-[84px] items-center justify-center overflow-hidden rounded border border-slate-200 bg-white">
+                                {part.part_img_url ? (
+                                  <Image
+                                    src={part.part_img_url}
+                                    alt={part.part_name}
+                                    width={76}
+                                    height={76}
+                                    unoptimized
+                                    className="h-[76px] w-[76px] object-contain"
+                                  />
+                                ) : null}
+                              </div>
+                              <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{part.part_num}</p>
+                              <p className="truncate text-[11px] text-slate-700">{part.part_name}</p>
+                              <p className="truncate text-[10px] text-slate-500">{part.color_name}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedMinifigForImagePopup ? (
+                <div
+                  className="fixed inset-0 z-[67] flex items-center justify-center bg-slate-900/55 p-4"
+                  onClick={() => setSelectedMinifigForImagePopup(null)}
+                >
+                  <div className="w-full max-w-[760px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-semibold text-slate-800">{selectedMinifigForImagePopup.name}</p>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMinifigForImagePopup(null)}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                      >
+                        {labels.close}
+                      </button>
+                    </div>
+                    <div className="mx-auto flex aspect-square w-full max-w-[680px] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                      {selectedMinifigForImagePopup.set_img_url ? (
+                        <Image
+                          src={selectedMinifigForImagePopup.set_img_url}
+                          alt={selectedMinifigForImagePopup.name}
+                          width={680}
+                          height={680}
+                          unoptimized
+                          className="h-[96%] w-[96%] object-contain"
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </main>
+      );
+    }
+
+    if (activeSection === "listas") {
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{labels.lists}</h2>
+                    <button
+                      type="button"
+                      onClick={() => void openOffersGivenPanel()}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                    >
+                      {labels.offeredToOthers}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void openOffersReceivedPanel()}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                    >
+                      {labels.offeredToMe}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {labels.back}
                   </button>
                 </div>
                 <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
@@ -3769,15 +7656,15 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 >
                   +
                 </button>
-                <p className="text-sm font-semibold text-slate-800">Crear lista</p>
+                <p className="text-sm font-semibold text-slate-800">{labels.createList}</p>
               </div>
 
               <div className="mt-4 space-y-5">
                 <section>
-                  <h3 className="font-boogaloo text-sm font-semibold text-slate-700">Tus listas de deseos creadas</h3>
+                  <h3 className="font-boogaloo text-2xl font-semibold text-slate-900">{labels.yourWishlists}</h3>
                   <div className="mt-2 space-y-2">
                     {listasDeseos.length === 0 ? (
-                      <p className="text-sm text-slate-500">Sin listas de deseos.</p>
+                      <p className="text-sm text-slate-500">{labels.noWishlistLists}</p>
                     ) : (
                       listasDeseos.map((item) => (
                         <div
@@ -3800,12 +7687,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                 type="button"
                                 onClick={() => openRenameListaPanel(item)}
                                 className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700"
-                                title="Renombrar lista"
+                                title={labels.renameListTitle}
                               >
                                 ✎
                               </button>
                             </div>
-                            <p className="text-xs text-slate-600">{`Lotes: ${item.lotes} - Piezas: ${item.piezas}`}</p>
+                            <p className="text-xs text-slate-600">{buildListStatsLabel(item.lotes, item.piezas)}</p>
                           </div>
                           <div className="flex flex-col items-end gap-1">
                             <div className="flex items-center gap-1">
@@ -3816,7 +7703,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                                 }`}
                               >
-                                Privado
+                                {labels.private}
                               </button>
                               <button
                                 type="button"
@@ -3825,7 +7712,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                                 }`}
                               >
-                                Público
+                                {labels.public}
                               </button>
                             </div>
                             <button
@@ -3833,7 +7720,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                               onClick={() => openDeleteListaConfirm(item)}
                               className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
                             >
-                              Chau lista
+                              {labels.deleteList}
                             </button>
                           </div>
                         </div>
@@ -3843,10 +7730,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </section>
 
                 <section>
-                  <h3 className="font-boogaloo text-sm font-semibold text-slate-700">Tus listas de venta creadas</h3>
+                  <h3 className="font-boogaloo text-2xl font-semibold text-slate-900">{labels.yourSaleLists}</h3>
                   <div className="mt-2 space-y-2">
                     {listasVenta.length === 0 ? (
-                      <p className="text-sm text-slate-500">Sin listas de venta.</p>
+                      <p className="text-sm text-slate-500">{labels.noSaleLists}</p>
                     ) : (
                       listasVenta.map((item) => (
                         <div
@@ -3869,12 +7756,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                 type="button"
                                 onClick={() => openRenameListaPanel(item)}
                                 className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700"
-                                title="Renombrar lista"
+                                title={labels.renameListTitle}
                               >
                                 ✎
                               </button>
                             </div>
-                            <p className="text-xs text-slate-600">{`Lotes: ${item.lotes} - Piezas: ${item.piezas}`}</p>
+                            <p className="text-xs text-slate-600">{buildListStatsLabel(item.lotes, item.piezas)}</p>
                           </div>
                           <div className="flex flex-col items-end gap-1">
                             <div className="flex items-center gap-1">
@@ -3885,7 +7772,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                                 }`}
                               >
-                                Privado
+                                {labels.private}
                               </button>
                               <button
                                 type="button"
@@ -3894,7 +7781,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                   item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                                 }`}
                               >
-                                Público
+                                {labels.public}
                               </button>
                             </div>
                             <button
@@ -3902,7 +7789,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                               onClick={() => openDeleteListaConfirm(item)}
                               className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
                             >
-                              Chau lista
+                              {labels.deleteList}
                             </button>
                           </div>
                         </div>
@@ -3913,6 +7800,92 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               </div>
             </div>
           </div>
+
+          {showOffersGivenPanel ? (
+            <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowOffersGivenPanel(false)}>
+              <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <p className="font-boogaloo text-xl text-slate-900">{labels.offeredToOthers}</p>
+                    <button
+                      type="button"
+                      onClick={() => printOffersSummary(labels.offeredToOthers, offersGivenRows)}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                    >
+                      {labels.print}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOffersGivenPanel(false)}
+                    className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                  >
+                    {labels.close}
+                  </button>
+                </div>
+                <div className="mt-3 max-h-[360px] overflow-auto space-y-2">
+                  {offersPanelsLoading ? (
+                    <p className="text-sm text-slate-500">{labels.loading}</p>
+                  ) : offersGivenRows.length === 0 ? (
+                    <p className="text-sm text-slate-500">{labels.noOffersRegistered}</p>
+                  ) : (
+                    offersGivenRows.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
+                          <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {showOffersReceivedPanel ? (
+            <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowOffersReceivedPanel(false)}>
+              <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <p className="font-boogaloo text-xl text-slate-900">{labels.offeredToMe}</p>
+                    <button
+                      type="button"
+                      onClick={() => printOffersSummary(labels.offeredToMe, offersReceivedRows)}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                    >
+                      {labels.print}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOffersReceivedPanel(false)}
+                    className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                  >
+                    {labels.close}
+                  </button>
+                </div>
+                <div className="mt-3 max-h-[360px] overflow-auto space-y-2">
+                  {offersPanelsLoading ? (
+                    <p className="text-sm text-slate-500">{labels.loading}</p>
+                  ) : offersReceivedRows.length === 0 ? (
+                    <p className="text-sm text-slate-500">{labels.noOffersReceived}</p>
+                  ) : (
+                    offersReceivedRows.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
+                          <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {showCreateListaPanel ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCreateListaPanel(false)}>
@@ -3925,7 +7898,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       newListaTipo === "deseos" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                     }`}
                   >
-                    Lista de deseos
+                    {labels.wishlistListType}
                   </button>
                   <button
                     type="button"
@@ -3934,25 +7907,25 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       newListaTipo === "venta" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
                     }`}
                   >
-                    Lista de venta
+                    {labels.saleListType}
                   </button>
                 </div>
 
-                <label className="block text-sm text-slate-700">Nombre</label>
+                <label className="block text-sm text-slate-700">{labels.name}</label>
                 <div className="mt-1 flex items-center gap-2">
                   <input
                     type="text"
                     value={newListaNombre}
                     onChange={(event) => setNewListaNombre(event.target.value)}
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Nombre de la lista"
+                    placeholder={labels.listNamePlaceholder}
                   />
                   <button
                     type="button"
                     onClick={() => void createListaItem()}
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
                   >
-                    Crear lista
+                    {labels.createList}
                   </button>
                 </div>
               </div>
@@ -3969,22 +7942,22 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               }}
             >
               <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-                <h3 className="text-lg font-semibold text-slate-900">Renombrar lista</h3>
-                <label className="mt-3 block text-sm text-slate-700">Nombre</label>
+                <h3 className="text-lg font-semibold text-slate-900">{labels.renameList}</h3>
+                <label className="mt-3 block text-sm text-slate-700">{labels.name}</label>
                 <div className="mt-1 flex items-center gap-2">
                   <input
                     type="text"
                     value={renameListaInput}
                     onChange={(event) => setRenameListaInput(event.target.value)}
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Nombre de la lista"
+                    placeholder={labels.listNamePlaceholder}
                   />
                   <button
                     type="button"
                     onClick={() => void saveRenameLista()}
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
                   >
-                    Guardar
+                    {labels.save}
                   </button>
                 </div>
               </div>
@@ -4011,7 +7984,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   />
                 </div>
                 <p className="text-center text-sm text-slate-900">
-                  ¿Estas seguro que queres borrar la lista? Se perdera la informacion de todas las piezas que esten dentro.
+                  {labels.deleteListConfirm}
                 </p>
                 <div className="mt-4 flex justify-center gap-2">
                   <button
@@ -4022,14 +7995,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                   >
-                    No
+                    {labels.no}
                   </button>
                   <button
                     type="button"
                     onClick={() => void deleteListaConfirmed()}
                     className="rounded-md border border-red-300 px-3 py-2 text-sm font-semibold text-red-700"
                   >
-                    Sí
+                    {labels.yes}
                   </button>
                 </div>
               </div>
@@ -4058,6 +8031,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
               className="mb-3 w-full rounded-lg bg-black px-4 py-2 text-left text-sm font-semibold text-white"
               onClick={() => {
                 setShowMasterPanel(true);
+                setMaintenanceDraftFooterLegend(footerLegend);
                 void loadMasterLugs();
               }}
             >
@@ -4081,6 +8055,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h1 className="font-boogaloo break-all text-3xl font-semibold text-slate-900 sm:text-5xl">{displayName}</h1>
+                    <button
+                      type="button"
+                      onClick={() => setShowLanguagePickerPopup(true)}
+                      className="relative inline-flex h-8 min-w-8 items-center justify-center rounded-full border-2 border-emerald-500 bg-white px-2 text-xs font-bold tracking-wide text-slate-800"
+                      title={uiLanguageLabels[language]}
+                      aria-label={t.language}
+                    >
+                      {activeLanguageIcon}
+                      <span className="pointer-events-none absolute -bottom-[4px] right-[4px] h-2.5 w-2.5 rotate-45 border-b-2 border-r-2 border-emerald-500 bg-white" />
+                    </button>
                     {isMaster && masterEmptyNotificationsCount > 0 ? (
                       <button
                         type="button"
@@ -4135,46 +8119,88 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   </div>
                 </div>
               </div>
-              {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
-                <Image
-                  src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
-                  alt={currentUserLug?.nombre || "Logo LUG"}
-                  width={88}
-                  height={88}
-                  unoptimized
-                  className="h-[88px] w-[88px] object-contain"
-                />
-              ) : null}
             </div>
 
             <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
 
-            <div className="mt-3 grid w-full grid-cols-4 gap-2">
+            <div className="mt-3 flex w-full flex-col items-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   void openListasSection();
                 }}
-                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
                 style={{ borderColor: currentLugColor2 || "#ffffff" }}
+                title="Listas"
               >
-                Listas
+                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
+                  <Image
+                    src="/api/avatar/Listas.png?v=20260314"
+                    alt="Listas"
+                    width={200}
+                    height={200}
+                    unoptimized
+                    className="h-full w-full object-contain"
+                  />
+                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cubano-title text-xl font-semibold tracking-wide text-black">
+                    <span className="relative inline-block">
+                      <span className="absolute inset-0 text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
+                        LISTAS
+                      </span>
+                      <span className="relative text-black">{labels.buttonLists}</span>
+                    </span>
+                  </span>
+                </div>
               </button>
               <button
                 type="button"
-                onClick={() => setStatus("Minifiguras en preparación.")}
-                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                onClick={() => {
+                  void openMinifigurasSection();
+                }}
+                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center font-cubano-title text-lg font-semibold text-black"
                 style={{ borderColor: currentLugColor2 || "#ffffff" }}
               >
-                Minifiguras
+                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
+                  <Image
+                    src="/api/avatar/minifiguras.png?v=20260314"
+                    alt="Minifiguras"
+                    width={200}
+                    height={200}
+                    unoptimized
+                    className="h-full w-full object-contain"
+                  />
+                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                    <span className="relative inline-block">
+                      <span className="absolute inset-0 font-cubano-title text-lg font-semibold tracking-wide text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
+                        minifiguras
+                      </span>
+                      <span className="relative font-cubano-title text-lg font-semibold tracking-wide text-black">{labels.buttonMinifig}</span>
+                    </span>
+                  </span>
+                </div>
               </button>
               <button
                 type="button"
-                onClick={() => setStatus("Módulo X en preparación.")}
-                className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                onClick={() => {
+                  router.push("/mi-lug");
+                  setActiveSection("mi_lug");
+                }}
+                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
                 style={{ borderColor: currentLugColor2 || "#ffffff" }}
+                title="Mi LUG"
               >
-                X
+                {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
+                  <Image
+                    src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
+                    alt={currentUserLug?.nombre || "Logo LUG"}
+                    width={200}
+                    height={200}
+                    unoptimized
+                    className="h-[88%] w-[88%] object-contain"
+                  />
+                ) : (
+                  "X"
+                )}
               </button>
               <button
                 type="button"
@@ -4185,18 +8211,28 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     void loadMyJoinRequests(userId);
                   }
                 }}
-                className="flex aspect-[5/3] w-full flex-col items-center justify-center rounded-lg border-2 bg-white"
+                className="flex aspect-[5/3] w-full max-w-[260px] flex-col items-center justify-center rounded-lg border-2 bg-white"
                 style={{ borderColor: currentLugColor2 || "#ffffff" }}
                 title="Ver LUGs"
               >
-                <Image
-                  src="/api/avatar/Mundo.png"
-                  alt="Ver LUGs"
-                  width={200}
-                  height={200}
-                  unoptimized
-                  className="h-[88%] w-[88%] object-contain"
-                />
+                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
+                  <Image
+                    src="/api/avatar/Mundo.png?v=20260314"
+                    alt="Ver LUGs"
+                    width={200}
+                    height={200}
+                    unoptimized
+                    className="h-full w-full object-contain"
+                  />
+                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cubano-title text-xl font-semibold tracking-wide text-black">
+                    <span className="relative inline-block">
+                      <span className="absolute inset-0 text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
+                        LUGs
+                      </span>
+                      <span className="relative text-black">{labels.buttonLugs}</span>
+                    </span>
+                  </span>
+                </div>
               </button>
             </div>
           </header>
@@ -4206,7 +8242,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         {showUserSettings ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
             <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
-              <h3 className="font-boogaloo text-xl text-slate-900">Configuracion de usuario</h3>
+              <h3 className="font-boogaloo text-xl text-slate-900">{labels.userSettings}</h3>
 
               <div className="mt-4 flex items-start gap-3">
                 <button
@@ -4228,7 +8264,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </button>
 
                 <div className="min-w-0 flex-1">
-                  <label className="block text-sm text-slate-700">Nombre</label>
+                  <label className="block text-sm text-slate-700">{labels.name}</label>
                   <input
                     type="text"
                     value={settingsNameInput}
@@ -4238,7 +8274,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </div>
               </div>
 
-              <label className="mt-3 block text-sm text-slate-700">Mail</label>
+              <label className="mt-3 block text-sm text-slate-700">{labels.mail}</label>
               <input
                 type="email"
                 value={settingsEmailInput}
@@ -4251,19 +8287,19 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 onClick={() => setShowPasswordFields((prev) => !prev)}
                 className="mt-3 rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
-                {showPasswordFields ? "Ocultar cambio de contrasena" : "Cambiar contrasena"}
+                {showPasswordFields ? labels.hidePasswordChange : labels.changePassword}
               </button>
 
               {showPasswordFields ? (
                 <>
-                  <label className="mt-3 block text-sm text-slate-700">Nueva contrasena</label>
+                  <label className="mt-3 block text-sm text-slate-700">{labels.newPassword}</label>
                   <input
                     type="password"
                     value={settingsPasswordInput}
                     onChange={(event) => setSettingsPasswordInput(event.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
-                  <label className="mt-3 block text-sm text-slate-700">Repetir contrasena</label>
+                  <label className="mt-3 block text-sm text-slate-700">{labels.repeatPassword}</label>
                   <input
                     type="password"
                     value={settingsPasswordConfirmInput}
@@ -4273,7 +8309,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </>
               ) : null}
 
-              <label className="mt-3 block text-sm text-slate-700">LUG</label>
+              <label className="mt-3 block text-sm text-slate-700">{labels.lug}</label>
               <button
                 type="button"
                 onClick={() => void openSettingsLugPanel()}
@@ -4283,7 +8319,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 {rolLug === "admin" ? " (admin)" : ""}
               </button>
 
-              <label className="mt-3 block text-sm text-slate-700">Red social</label>
+              <label className="mt-3 block text-sm text-slate-700">{labels.socialNetwork}</label>
               <div className="mt-1 grid grid-cols-[140px_minmax(0,1fr)] gap-2">
                 <select
                   value={settingsSocialPlatform}
@@ -4292,18 +8328,18 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 >
                   <option value="instagram">Instagram</option>
                   <option value="facebook">Facebook</option>
-                  <option value="">Ninguna</option>
+                  <option value="">{labels.none}</option>
                 </select>
                 <input
                   type="text"
                   value={settingsSocialHandle}
                   onChange={(event) => setSettingsSocialHandle(event.target.value)}
-                  placeholder="usuario"
+                  placeholder={labels.userPlaceholder}
                   className="rounded-lg border border-slate-300 px-3 py-2"
                 />
               </div>
 
-              <label className="mt-3 block text-sm text-slate-700">Idioma</label>
+              <label className="mt-3 block text-sm text-slate-700">{t.language}</label>
               <select
                 value={settingsLanguageInput}
                 onChange={(event) => setSettingsLanguageInput(event.target.value as UiLanguage)}
@@ -4322,7 +8358,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   onClick={() => setShowFacePicker(false)}
                 >
                   <div className="w-full max-w-sm rounded-xl bg-white p-4" onClick={(event) => event.stopPropagation()}>
-                    <p className="text-sm text-slate-700">Doble clic para seleccionar</p>
+                    <p className="text-sm text-slate-700">{labels.doubleClickSelect}</p>
                     <div className="mt-3 grid grid-cols-5 gap-1.5">
                       {Array.from({ length: FACE_TOTAL }, (_, index) => {
                         const faceNum = index + 1;
@@ -4367,7 +8403,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   }}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                 >
-                  Cancelar
+                  {labels.cancel}
                 </button>
                 <button
                   type="button"
@@ -4380,7 +8416,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     borderColor: uiColor3,
                   }}
                 >
-                  {settingsSaving ? "Guardando..." : "Guardar"}
+                  {settingsSaving ? labels.saving : labels.save}
                 </button>
               </div>
             </div>
@@ -4395,7 +8431,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
             >
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-boogaloo text-xl text-slate-900">
-                  {rolLug === "admin" ? "Propiedades del LUG" : "Informacion del LUG"}
+                  {rolLug === "admin" ? labels.lugProperties : labels.lugInformation}
                 </h3>
                 {rolLug === "admin" ? (
                   <button
@@ -4403,13 +8439,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     onClick={() => setShowSettingsLugPanel(false)}
                     className="rounded-md border border-slate-300 px-3 py-1 text-sm"
                   >
-                    Cerrar
+                    {labels.close}
                   </button>
                 ) : null}
               </div>
 
               {settingsLugPanelLoading ? (
-                <p className="mt-4 text-sm text-slate-600">Cargando informacion del LUG...</p>
+                <p className="mt-4 text-sm text-slate-600">{labels.loadingLugInfo}</p>
               ) : (
                 <>
                   {rolLug !== "admin" ? (
@@ -4429,16 +8465,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         </div>
 
                         <div className="mt-4 text-center">
-                          <p className="text-xl font-semibold text-slate-900">{settingsLugNombreInput || "Sin LUG"}</p>
-                          <p className="mt-1 text-sm text-slate-600">{settingsLugPaisInput || "Sin pais"}</p>
-                          <p className="mx-auto mt-4 max-w-[420px] text-sm leading-6 text-slate-700">{settingsLugDescripcionInput || "Sin descripcion"}</p>
+                          <p className="text-xl font-semibold text-slate-900">{settingsLugNombreInput || labels.noLug}</p>
+                          <p className="mt-1 text-sm text-slate-600">{settingsLugPaisInput || labels.noCountry}</p>
+                          <p className="mx-auto mt-4 max-w-[420px] text-sm leading-6 text-slate-700">{settingsLugDescripcionInput || labels.noDescription}</p>
                         </div>
                       </div>
                     </div>
                   ) : (
                     <div className="mx-auto mt-4 w-full max-w-[500px] space-y-3">
                       <div>
-                        <label className="block text-sm text-slate-700">Logo</label>
+                        <label className="block text-sm text-slate-700">{labels.logo}</label>
                         <input
                           type="file"
                           accept="image/png,image/jpeg"
@@ -4462,7 +8498,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       </div>
 
                       <div>
-                        <label className="block text-sm text-slate-700">Nombre</label>
+                        <label className="block text-sm text-slate-700">{labels.name}</label>
                         <input
                           type="text"
                           value={settingsLugNombreInput}
@@ -4472,7 +8508,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       </div>
 
                       <div>
-                        <label className="block text-sm text-slate-700">Pais / ciudad</label>
+                        <label className="block text-sm text-slate-700">{labels.countryCity}</label>
                         <input
                           type="text"
                           value={settingsLugPaisInput}
@@ -4482,7 +8518,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       </div>
 
                       <div>
-                        <label className="block text-sm text-slate-700">Descripcion</label>
+                        <label className="block text-sm text-slate-700">{labels.description}</label>
                         <textarea
                           value={settingsLugDescripcionInput}
                           onChange={(event) => setSettingsLugDescripcionInput(event.target.value)}
@@ -4549,7 +8585,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         }}
                         className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
                       >
-                        Cambiar de LUG
+                        {labels.switchLug}
                       </button>
                     ) : null}
                     {rolLug === "admin" ? (
@@ -4558,7 +8594,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                         onClick={() => setShowSettingsLugPanel(false)}
                         className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                       >
-                        Cerrar
+                        {labels.close}
                       </button>
                     ) : null}
                     {rolLug === "admin" ? (
@@ -4573,7 +8609,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           borderColor: uiColor3,
                         }}
                       >
-                        {settingsLugSaving ? "Guardando..." : "Guardar"}
+                        {settingsLugSaving ? labels.saving : labels.save}
                       </button>
                     ) : null}
                   </div>
@@ -4588,14 +8624,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-xl text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
-                  Panel Master
+                  {labels.masterPanel}
                 </h3>
                 <button
                   type="button"
                   onClick={() => setShowMasterPanel(false)}
                   className="rounded-md border border-slate-300 px-3 py-1 text-sm"
                 >
-                  Cerrar
+                  {labels.close}
                 </button>
               </div>
 
@@ -4616,16 +8652,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
                   >
-                    Crear LUG
+                    {labels.createLug}
                   </button>
                 </div>
 
                 <div className="mt-3 max-h-[320px] overflow-auto rounded-md border border-slate-200 p-2">
-                  <p className="mb-2 text-xs text-slate-500">Doble clic en un LUG para asignarlo como actual.</p>
+                  <p className="mb-2 text-xs text-slate-500">{labels.doubleClickAssignLug}</p>
                   {masterLugsLoading ? (
-                    <p className="text-sm text-slate-600">Cargando LUGs...</p>
+                    <p className="text-sm text-slate-600">{labels.loadingLugs}</p>
                   ) : masterLugs.length === 0 ? (
-                    <p className="text-sm text-slate-500">No hay LUGs cargados.</p>
+                    <p className="text-sm text-slate-500">{labels.noLugsLoaded}</p>
                   ) : (
                     <ul className="space-y-2">
                       {masterLugs.map((lug) => (
@@ -4650,9 +8686,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
-                            <p className="truncate text-xs text-slate-600">{lug.pais ?? "Sin pais"}</p>
+                            <p className="truncate text-xs text-slate-600">{lug.pais ?? labels.noCountry}</p>
                           </div>
-                          <p className="text-xs text-slate-700">{lug.members_count} miembros</p>
+                          <p className="text-xs text-slate-700">{`${lug.members_count} ${labels.membersSuffix}`}</p>
                           {lug.open_access ? (
                             <button
                               type="button"
@@ -4675,7 +8711,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
               <div className="mt-4 rounded-lg border border-slate-200 p-4">
                 <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
-                  Mantenimiento
+                  {labels.maintenanceSection}
                 </h4>
                 <div className="mt-3 flex flex-wrap items-center justify-start gap-2">
                   <button
@@ -4686,7 +8722,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
                   >
-                    Frases de carga
+                    {labels.loadingPhrasesTitle}
                   </button>
                   <button
                     type="button"
@@ -4699,8 +8735,28 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
                   >
-                    {maintenanceEnabled ? "Sacar de mantenimiento" : "Bloqueo de mantenimiento"}
+                    {maintenanceEnabled ? labels.disableMaintenance : labels.maintenanceLockTitle}
                   </button>
+                </div>
+
+                <div className="mt-3">
+                  <label className="block text-sm text-slate-700">{labels.footerLegendLabel}</label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={maintenanceDraftFooterLegend}
+                      onChange={(event) => setMaintenanceDraftFooterLegend(event.target.value)}
+                      placeholder={labels.footerLegendPlaceholder}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveFooterLegendInMaster()}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                    >
+                      {labels.footerLegendSave}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4710,8 +8766,8 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         {showLoadingPhrasesPanel ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowLoadingPhrasesPanel(false)}>
             <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-xl text-slate-900">Frases de carga</h3>
-              <p className="mt-1 text-sm text-slate-600">Edita y guarda las frases. Se aplica en próximas cargas.</p>
+              <h3 className="text-xl text-slate-900">{labels.loadingPhrasesTitle}</h3>
+              <p className="mt-1 text-sm text-slate-600">{labels.loadingPhrasesHelp}</p>
 
               <div className="mt-4 space-y-2">
                 {DEFAULT_LOADING_PHRASES.map((_phrase, index) => (
@@ -4737,14 +8793,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   onClick={() => setShowLoadingPhrasesPanel(false)}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                 >
-                  Cancelar
+                  {labels.cancel}
                 </button>
                 <button
                   type="button"
                   onClick={() => saveLoadingPhrases(loadingPhrasesDraft)}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
                 >
-                  Guardar
+                  {labels.save}
                 </button>
               </div>
             </div>
@@ -4755,7 +8811,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowMaintenancePanel(false)}>
             <div className="w-full max-w-[620px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">Bloqueo de mantenimiento</h3>
+                <h3 className="text-xl text-slate-900">{labels.maintenanceLockTitle}</h3>
                 <button
                   type="button"
                   onClick={() => void activateMaintenanceMode()}
@@ -4766,29 +8822,29 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     borderColor: uiColor3,
                   }}
                 >
-                  Poner en mantenimiento
+                  {labels.enableMaintenance}
                 </button>
               </div>
 
-              <label className="block text-sm text-slate-700">Frase linea 1</label>
+              <label className="block text-sm text-slate-700">{labels.maintenanceLine1}</label>
               <input
                 type="text"
                 value={maintenanceDraftMessageLine1}
                 onChange={(event) => setMaintenanceDraftMessageLine1(event.target.value)}
                 className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Escribí la primera línea"
+                placeholder={labels.maintenanceLine1Placeholder}
               />
 
-              <label className="mt-3 block text-sm text-slate-700">Frase linea 2</label>
+              <label className="mt-3 block text-sm text-slate-700">{labels.maintenanceLine2}</label>
               <input
                 type="text"
                 value={maintenanceDraftMessageLine2}
                 onChange={(event) => setMaintenanceDraftMessageLine2(event.target.value)}
                 className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Escribí la segunda línea"
+                placeholder={labels.maintenanceLine2Placeholder}
               />
 
-              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Vista previa</p>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">{labels.preview}</p>
               <div className="bg-lego-tile mt-2 min-h-[280px] rounded-lg p-4">
                 <div className="flex min-h-[248px] flex-col items-center justify-center gap-3">
                   <Image
@@ -4814,23 +8870,31 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         ) : null}
 
         {showLugsPanel ? (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowLugsPanel(false)}>
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4"
+            onClick={() => {
+              if (!mustSelectLugOnDashboard) {
+                setShowLugsPanel(false);
+              }
+            }}
+          >
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="font-boogaloo text-xl text-slate-900">Lista de LUGs</h3>
+                <h3 className="font-boogaloo text-xl text-slate-900">{labels.lugsList}</h3>
               </div>
+              {mustSelectLugOnDashboard ? <p className="mt-1 text-xs font-semibold text-slate-600">{labels.mustJoinOrCreateLug}</p> : null}
 
               <div className="mt-3 rounded-md border border-slate-200 p-2">
-                <p className="mb-2 text-xs text-slate-500">Doble clic en un LUG para ver su informacion.</p>
+                <p className="mb-2 text-xs text-slate-500">{labels.doubleClickLugInfo}</p>
                 {masterLugsLoading ? (
-                  <p className="text-sm text-slate-600">Cargando LUGs...</p>
+                  <p className="text-sm text-slate-600">{labels.loadingLugs}</p>
                 ) : masterLugs.length === 0 ? (
-                  <p className="text-sm text-slate-500">No hay LUGs cargados.</p>
+                  <p className="text-sm text-slate-500">{labels.noLugsLoaded}</p>
                 ) : (
                   <>
                     {currentUserLug ? (
                       <div className="mb-3">
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Tu LUG</p>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{labels.yourLug}</p>
                         <div
                           onDoubleClick={() => void openLugInfoPanel(currentUserLug.lug_id)}
                           className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 p-2"
@@ -4853,7 +8917,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold">{currentUserLug.nombre}</p>
-                            <p className="truncate text-xs opacity-90">{`${currentUserLug.pais ?? "Sin pais"} - ${currentUserLug.members_count} miembros`}</p>
+                            <p className="truncate text-xs opacity-90">{`${currentUserLug.pais ?? labels.noCountry} - ${currentUserLug.members_count} ${labels.membersSuffix}`}</p>
                           </div>
                         </div>
                       </div>
@@ -4861,7 +8925,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
                     <div className="max-h-[320px] overflow-auto rounded-md border border-slate-200 p-2">
                       {otherLugs.length === 0 ? (
-                        <p className="text-sm text-slate-500">No hay otros LUGs para mostrar.</p>
+                        <p className="text-sm text-slate-500">{labels.noOtherLugs}</p>
                       ) : (
                         <ul className="space-y-2">
                           {otherLugs.map((lug) => (
@@ -4884,7 +8948,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                               </div>
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold text-slate-900">{lug.nombre}</p>
-                                <p className="truncate text-xs text-slate-600">{`${lug.pais ?? "Sin pais"} - ${lug.members_count} miembros`}</p>
+                                <p className="truncate text-xs text-slate-600">{`${lug.pais ?? labels.noCountry} - ${lug.members_count} ${labels.membersSuffix}`}</p>
                               </div>
                               <button
                                 type="button"
@@ -4902,12 +8966,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                 className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
                               >
                                 {requestActionLoadingLugId === lug.lug_id
-                                  ? "Procesando..."
+                                  ? t.processing
                                   : lug.open_access
-                                    ? "Entrar directo"
+                                    ? labels.enterDirect
                                     : requestedLugIds.includes(lug.lug_id)
-                                    ? "Cancelar solicitud"
-                                    : "Solicitar ingreso"}
+                                    ? labels.cancelRequest
+                                    : labels.requestJoin}
                               </button>
                             </li>
                           ))}
@@ -4939,7 +9003,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                           borderColor: uiColor3,
                         }}
                       >
-                        Crear nuevo LUG
+                        {labels.createNewLug}
                       </button>
                     </div>
                   </>
@@ -4952,7 +9016,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         {showJoinRequestFormPanel ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowJoinRequestFormPanel(false)}>
             <div className="w-full max-w-[320px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-base font-semibold text-slate-900">Solicitar ingreso</h3>
+              <h3 className="text-base font-semibold text-slate-900">{labels.requestJoinTitle}</h3>
               <p className="mt-1 text-xs text-slate-600">{joinRequestTargetLugName}</p>
 
               <div className="mt-3 space-y-2">
@@ -4960,14 +9024,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   value={joinRequestMessageInput}
                   onChange={(event) => setJoinRequestMessageInput(event.target.value)}
                   rows={3}
-                  placeholder="Escribe un mensaje"
+                  placeholder={labels.writeMessage}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 />
                 <input
                   type="text"
                   value={joinRequestSocialInput}
                   onChange={(event) => setJoinRequestSocialInput(event.target.value)}
-                  placeholder="Red social"
+                  placeholder={labels.socialNetwork}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 />
               </div>
@@ -4979,7 +9043,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   disabled={joinRequestSending}
                   className="rounded-md bg-[#006eb2] px-4 py-2 text-sm font-semibold text-white"
                 >
-                  {joinRequestSending ? "Enviando..." : "Enviar"}
+                  {joinRequestSending ? labels.sending : labels.send}
                 </button>
               </div>
             </div>
@@ -4990,11 +9054,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowLugInfoPanel(false)}>
             <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">Informacion del LUG</h3>
+                <h3 className="text-xl text-slate-900">{labels.lugInfoTitle}</h3>
               </div>
 
               {lugInfoLoading ? (
-                <p className="mt-4 text-sm text-slate-600">Cargando informacion...</p>
+                <p className="mt-4 text-sm text-slate-600">{labels.loadingInfo}</p>
               ) : lugInfoData ? (
                 <>
                   <div
@@ -5016,18 +9080,18 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                       </div>
 
                       <div className="mt-4 text-center">
-                        <p className="text-xl font-semibold text-slate-900">{lugInfoData.nombre || "Sin nombre"}</p>
-                        <p className="mt-1 text-sm text-slate-600">{lugInfoData.pais || "Sin pais"}</p>
-                        <p className="mx-auto mt-4 max-w-[320px] text-sm leading-6 text-slate-700">{lugInfoData.descripcion || "Sin descripcion"}</p>
+                        <p className="text-xl font-semibold text-slate-900">{lugInfoData.nombre || labels.noName}</p>
+                        <p className="mt-1 text-sm text-slate-600">{lugInfoData.pais || labels.noCountry}</p>
+                        <p className="mx-auto mt-4 max-w-[320px] text-sm leading-6 text-slate-700">{lugInfoData.descripcion || labels.noDescription}</p>
                       </div>
                     </div>
                   </div>
 
                   <div className="mt-4 rounded-lg border border-slate-200 p-3">
-                    <h4 className="text-sm font-semibold text-slate-900">Miembros</h4>
+                    <h4 className="text-sm font-semibold text-slate-900">{labels.members}</h4>
                     <div className="mt-2 max-h-[180px] overflow-auto rounded-md border border-slate-200 p-2">
                       {lugInfoData.members.length === 0 ? (
-                        <p className="text-sm text-slate-500">No hay miembros cargados.</p>
+                        <p className="text-sm text-slate-500">{labels.noMembersLoaded}</p>
                       ) : (
                         <ul className="space-y-2">
                           {lugInfoData.members.map((member) => (
@@ -5046,16 +9110,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                                     type="button"
                                     onClick={() => void promoteMemberToAdmin(member.id, member.full_name)}
                                     disabled={promoteMemberLoadingId === member.id}
-                                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                    style={{
+                                      backgroundColor: currentLugColor2 || "#ffffff",
+                                      color: getContrastTextColor(currentLugColor2 || "#ffffff"),
+                                      borderColor: currentLugColor3 || "#111111",
+                                    }}
                                   >
-                                    {promoteMemberLoadingId === member.id ? "Procesando..." : "Hacer Admin"}
+                                    {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
                                   </button>
                                 ) : null}
                               </div>
                               <p className="text-xs text-slate-600">
                                 {member.social_platform && member.social_handle
                                   ? `${member.social_platform}: ${member.social_handle}`
-                                  : "Sin red social"}
+                                  : labels.noSocial}
                               </p>
                             </li>
                           ))}
@@ -5065,7 +9134,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   </div>
                 </>
               ) : (
-                <p className="mt-4 text-sm text-slate-600">No pudimos cargar el detalle del LUG.</p>
+                <p className="mt-4 text-sm text-slate-600">{labels.noLugDetail}</p>
               )}
             </div>
           </div>
@@ -5075,21 +9144,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowAdminRequestsPanel(false)}>
             <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">Solicitudes de ingreso</h3>
+                <h3 className="text-xl text-slate-900">{labels.joinRequestsTitle}</h3>
                 <button
                   type="button"
                   onClick={() => setShowAdminRequestsPanel(false)}
                   className="rounded-md border border-slate-300 px-3 py-1 text-sm"
                 >
-                  Cerrar
+                  {labels.close}
                 </button>
               </div>
 
               <div className="mt-3 max-h-[320px] overflow-auto rounded-md border border-slate-200 p-2">
                 {adminRequestsLoading ? (
-                  <p className="text-sm text-slate-600">Cargando solicitudes...</p>
+                  <p className="text-sm text-slate-600">{labels.loadingJoinRequests}</p>
                 ) : adminRequests.length === 0 ? (
-                  <p className="text-sm text-slate-500">No hay solicitudes pendientes.</p>
+                  <p className="text-sm text-slate-500">{labels.noPendingRequests}</p>
                 ) : (
                   <ul className="space-y-2">
                     {adminRequests.map((request) => (
@@ -5104,7 +9173,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             ? request.contact_social
                             : request.social_platform && request.social_handle
                               ? `${request.social_platform}: ${request.social_handle}`
-                              : "Sin red social"}
+                              : labels.noSocial}
                         </p>
                       </li>
                     ))}
@@ -5119,28 +9188,28 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowMasterEmptyLugsPanel(false)}>
             <div className="w-full max-w-[460px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xl text-slate-900">LUGs vacíos</h3>
+                <h3 className="text-xl text-slate-900">{labels.emptyLugsTitle}</h3>
                 <button
                   type="button"
                   onClick={() => setShowMasterEmptyLugsPanel(false)}
                   className="rounded-md border border-slate-300 px-3 py-1 text-sm"
                 >
-                  Cerrar
+                  {labels.close}
                 </button>
               </div>
 
               <div className="mt-3 max-h-[360px] overflow-auto rounded-md border border-slate-200 p-2">
                 {masterEmptyLugsLoading ? (
-                  <p className="text-sm text-slate-600">Cargando LUGs vacíos...</p>
+                  <p className="text-sm text-slate-600">{labels.loadingEmptyLugs}</p>
                 ) : masterEmptyLugs.length === 0 ? (
-                  <p className="text-sm text-slate-500">No hay LUGs vacíos pendientes.</p>
+                  <p className="text-sm text-slate-500">{labels.noPendingEmptyLugs}</p>
                 ) : (
                   <ul className="space-y-2">
                     {masterEmptyLugs.map((emptyLug) => (
                       <li key={emptyLug.notification_id} className="rounded-md border border-slate-200 p-3">
-                        <p className="text-sm font-semibold text-slate-900">{emptyLug.nombre || "Sin nombre"}</p>
-                        <p className="text-xs text-slate-600">{emptyLug.pais || "Sin pais"}</p>
-                        <p className="mt-1 text-xs text-slate-600">{emptyLug.descripcion || "Sin descripcion"}</p>
+                        <p className="text-sm font-semibold text-slate-900">{emptyLug.nombre || labels.noName}</p>
+                        <p className="text-xs text-slate-600">{emptyLug.pais || labels.noCountry}</p>
+                        <p className="mt-1 text-xs text-slate-600">{emptyLug.descripcion || labels.noDescription}</p>
 
                         <div className="mt-3 flex justify-end gap-2">
                           <button
@@ -5149,7 +9218,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             disabled={masterLugActionLoadingId === emptyLug.notification_id}
                             className="rounded-md border border-red-300 px-3 py-1 text-xs font-semibold text-red-700"
                           >
-                            Borrar LUG
+                            {labels.deleteLug}
                           </button>
                           <button
                             type="button"
@@ -5157,7 +9226,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                             disabled={masterLugActionLoadingId === emptyLug.notification_id}
                             className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
                           >
-                            Dejar abierto
+                            {labels.leaveOpen}
                           </button>
                         </div>
                       </li>
@@ -5172,17 +9241,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         {showAdminRequestDetailPanel && selectedAdminRequest ? (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4" onClick={() => setShowAdminRequestDetailPanel(false)}>
             <div className="w-full max-w-[360px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-base font-semibold text-slate-900">Solicitud de ingreso</h3>
+              <h3 className="text-base font-semibold text-slate-900">{labels.requestJoinTitle}</h3>
               <p className="mt-2 text-sm font-semibold text-slate-900">{selectedAdminRequest.full_name}</p>
               <p className="mt-1 text-xs text-slate-600">
                 {selectedAdminRequest.contact_social
                   ? selectedAdminRequest.contact_social
                   : selectedAdminRequest.social_platform && selectedAdminRequest.social_handle
                     ? `${selectedAdminRequest.social_platform}: ${selectedAdminRequest.social_handle}`
-                    : "Sin red social"}
+                    : labels.noSocial}
               </p>
               <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                {selectedAdminRequest.request_message || "Sin mensaje"}
+                {selectedAdminRequest.request_message || labels.noMessage}
               </p>
 
               <div className="mt-4 flex justify-end gap-2">
@@ -5192,7 +9261,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   disabled={adminDecisionLoading}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 >
-                  Rechazar
+                  {labels.reject}
                 </button>
                 <button
                   type="button"
@@ -5200,7 +9269,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   disabled={adminDecisionLoading}
                   className="rounded-md bg-[#006eb2] px-3 py-2 text-sm font-semibold text-white"
                 >
-                  Aceptar
+                  {labels.accept}
                 </button>
               </div>
             </div>
@@ -5217,11 +9286,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
             }}
           >
             <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="font-boogaloo text-xl text-slate-900">Crear LUG</h3>
+              <h3 className="font-boogaloo text-xl text-slate-900">{labels.createLug}</h3>
 
               <div className="mt-4 space-y-3">
                 <div>
-                  <label className="block text-sm text-slate-700">Cargar imagen logo (max 500x500)</label>
+                  <label className="block text-sm text-slate-700">{labels.uploadLogoMax}</label>
                   <input
                     type="file"
                     accept="image/png,image/jpeg"
@@ -5238,7 +9307,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </div>
 
                 <div>
-                  <label className="block text-sm text-slate-700">Nombre</label>
+                  <label className="block text-sm text-slate-700">{labels.name}</label>
                   <input
                     type="text"
                     value={lugNombre}
@@ -5248,7 +9317,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </div>
 
                 <div>
-                  <label className="block text-sm text-slate-700">Pais / ciudad</label>
+                  <label className="block text-sm text-slate-700">{labels.countryCity}</label>
                   <input
                     type="text"
                     value={lugPais}
@@ -5258,7 +9327,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                 </div>
 
                 <div>
-                  <label className="block text-sm text-slate-700">Descripcion</label>
+                  <label className="block text-sm text-slate-700">{labels.description}</label>
                   <textarea
                     value={lugDescripcion}
                     onChange={(event) => setLugDescripcion(event.target.value)}
@@ -5269,7 +9338,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <div>
-                    <label className="block text-sm text-slate-700">Color1</label>
+                    <label className="block text-sm text-slate-700">{labels.color1}</label>
                     <input
                       type="text"
                       value={lugColor1}
@@ -5278,7 +9347,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-slate-700">Color2</label>
+                    <label className="block text-sm text-slate-700">{labels.color2}</label>
                     <input
                       type="text"
                       value={lugColor2}
@@ -5287,7 +9356,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-slate-700">Color3</label>
+                    <label className="block text-sm text-slate-700">{labels.color3}</label>
                     <input
                       type="text"
                       value={lugColor3}
@@ -5308,7 +9377,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   }}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                 >
-                  Cancelar
+                  {labels.cancel}
                 </button>
                 <button
                   type="button"
@@ -5327,7 +9396,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     borderColor: uiColor3,
                   }}
                 >
-                  {creatingLug ? "Creando..." : createLugFromListFlow ? "Crear nuevo LUG" : "Crear LUG"}
+                  {creatingLug ? labels.creating : createLugFromListFlow ? labels.createNewLugShort : labels.createLugButton}
                 </button>
               </div>
             </div>
@@ -5347,14 +9416,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   className="h-48 w-48 object-contain"
                 />
               </div>
-              <p className="text-sm text-slate-900">Si seguís adelante vas a abandonar tu LUG actual.</p>
+              <p className="text-sm text-slate-900">{labels.leaveCurrentLugOnCreate}</p>
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowCreateLugConfirmPanel(false)}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 >
-                  Cancelar
+                  {labels.cancel}
                 </button>
                 <button
                   type="button"
@@ -5367,7 +9436,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     borderColor: uiColor3,
                   }}
                 >
-                  OK
+                  {labels.ok}
                 </button>
               </div>
             </div>
@@ -5393,7 +9462,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   className="h-48 w-48 object-contain"
                 />
               </div>
-              <p className="text-sm text-slate-900">Si seguís adelante vas a salir de tu LUG actual.</p>
+              <p className="text-sm text-slate-900">{labels.leaveCurrentLugOnAccess}</p>
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
@@ -5403,7 +9472,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                   }}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 >
-                  Cancelar
+                  {labels.cancel}
                 </button>
                 <button
                   type="button"
@@ -5415,12 +9484,50 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
                     borderColor: uiColor3,
                   }}
                 >
-                  OK
+                  {labels.ok}
                 </button>
               </div>
             </div>
           </div>
         ) : null}
+
+        {showLanguagePickerPopup ? (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowLanguagePickerPopup(false)}>
+            <div className="w-full max-w-[300px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-boogaloo text-xl text-slate-900">{t.language}</p>
+                <button
+                  type="button"
+                  onClick={() => setShowLanguagePickerPopup(false)}
+                  className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                >
+                  {labels.close}
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {uiLanguages.map((option) => (
+                  <button
+                    key={`lang-${option}`}
+                    type="button"
+                    onClick={() => void changeUiLanguage(option)}
+                    disabled={languageChanging}
+                    className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+                      language === option ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+                    }`}
+                  >
+                    {option.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mx-auto mt-2 w-full max-w-[800px] px-2 text-center">
+          <p className="mx-auto inline-block px-2 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+            {footerLegend || "LUGs App"}
+          </p>
+        </div>
 
         {status ? <p className="mx-auto mt-4 w-full max-w-[800px] rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">{status}</p> : null}
 
@@ -5524,6 +9631,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         </form>
 
         {status ? <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">{status}</p> : null}
+
+        <div className="mt-2 w-full px-2 text-center">
+          <p className="mx-auto inline-block px-2 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+            {footerLegend || "LUGs App"}
+          </p>
+        </div>
 
         {showLoaderPopup ? (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4">
