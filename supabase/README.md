@@ -74,6 +74,8 @@
   - Adds local minifigure sets and set-parts catalog tables for a Rebrickable-free Minifiguras section.
 - `supabase/migrations/0036_add_parts_import_status_to_minifigure_sets_catalog.sql`
   - Adds `parts_import_status` to track pending/imported/empty sets and avoid retrying known-empty imports.
+- `supabase/migrations/0037_add_get_profile_names_by_ids_rpc.sql`
+  - Adds a security-definer RPC to resolve profile display names across users for offers/pools UIs.
 
 ## How to run in Supabase dashboard
 
@@ -114,6 +116,7 @@
 35. Run `0034_add_minifig_preferences.sql`.
 36. Run `0035_create_minifig_catalog_sets_and_parts.sql`.
 37. Run `0036_add_parts_import_status_to_minifigure_sets_catalog.sql`.
+38. Run `0037_add_get_profile_names_by_ids_rpc.sql`.
 
 ## Notes
 

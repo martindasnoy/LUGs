@@ -39,14 +39,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ names: {} });
   }
 
-  const { data } = await supabase.from("profiles").select("id, full_name").in("id", ids);
+  const rpcResult = await supabase.rpc("get_profile_names_by_ids", { p_ids: ids });
+  if (!rpcResult.error) {
+    const names: Record<string, string> = {};
+    const rows = (rpcResult.data ?? []) as Array<Record<string, unknown>>;
+    rows.forEach((row) => {
+      const id = String(row.id ?? "").trim();
+      const displayName = String(row.display_name ?? "").trim();
+      if (id && displayName) {
+        names[id] = displayName;
+      }
+    });
+    return NextResponse.json({ names });
+  }
+
+  const { data } = await supabase.from("profiles").select("id, full_name, username").in("id", ids);
   const names: Record<string, string> = {};
 
   (data ?? []).forEach((row) => {
     const id = String(row.id ?? "").trim();
     const fullName = String(row.full_name ?? "").trim();
-    if (id && fullName) {
-      names[id] = fullName;
+    const username = String((row as { username?: unknown }).username ?? "").trim();
+    const displayName = fullName || username;
+    if (id && displayName) {
+      names[id] = displayName;
     }
   });
 

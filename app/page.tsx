@@ -3258,7 +3258,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       const listId = itemListByItemId.get(itemId) ?? "";
       const ownerId = listOwnerByListId.get(listId) ?? "";
       const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
-      const userName = ownerNamesById.get(ownerId) || "Usuario";
+      const userName = ownerNamesById.get(ownerId) || (ownerId ? `ID ${ownerId.slice(0, 8)}` : labels.noNameFallback);
       const partLabel = itemLabelByItemId.get(itemId) || "- - Pieza";
 
       return {
@@ -3276,7 +3276,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
     setOffersGivenRows(rows);
     setOffersPanelsLoading(false);
-  }, [fetchProfileNamesByIds, supabase, t.errorPrefix, userId]);
+  }, [fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
 
   const loadOffersReceivedSummary = useCallback(async () => {
     if (!supabase || !userId) {
@@ -3341,7 +3341,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       const requesterId = String((row as { requester_id?: unknown }).requester_id ?? "");
       const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
       const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
-      const userName = requesterNamesById.get(requesterId) || "Usuario";
+      const userName = requesterNamesById.get(requesterId) || (requesterId ? `ID ${requesterId.slice(0, 8)}` : labels.noNameFallback);
       const partLabel = itemLabelById.get(itemId) || "- - Pieza";
 
       return {
@@ -3359,7 +3359,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
     setOffersReceivedRows(rows);
     setOffersPanelsLoading(false);
-  }, [fetchProfileNamesByIds, supabase, t.errorPrefix, userId]);
+  }, [fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
 
   function printOffersSummary(title: string, rows: OfferSummaryRow[]) {
     if (rows.length === 0) {
