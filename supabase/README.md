@@ -78,6 +78,10 @@
   - Adds a security-definer RPC to resolve profile display names across users for offers/pools UIs.
 - `supabase/migrations/0038_add_dashboard_sections_visibility_to_app_maintenance.sql`
   - Adds ON/OFF toggles for Dashboard sections (balance, listas, sets, minifiguras).
+- `supabase/migrations/0039_include_avatar_key_in_get_lug_members_current.sql`
+  - Extends LUG members RPC to include avatar keys for member thumbnail rendering.
+- `supabase/migrations/0040_add_get_profile_avatars_by_ids_rpc.sql`
+  - Adds a security-definer RPC to resolve avatar keys by user ids for member lists.
 
 ## How to run in Supabase dashboard
 
@@ -120,6 +124,8 @@
 37. Run `0036_add_parts_import_status_to_minifigure_sets_catalog.sql`.
 38. Run `0037_add_get_profile_names_by_ids_rpc.sql`.
 39. Run `0038_add_dashboard_sections_visibility_to_app_maintenance.sql`.
+40. Run `0039_include_avatar_key_in_get_lug_members_current.sql`.
+41. Run `0040_add_get_profile_avatars_by_ids_rpc.sql`.
 
 ## Notes
 

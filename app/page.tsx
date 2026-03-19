@@ -24,6 +24,7 @@ type MasterLugItem = {
 type LugMemberItem = {
   id: string;
   full_name: string;
+  avatar_key: string | null;
   social_platform: string | null;
   social_handle: string | null;
   rol_lug: string | null;
@@ -1352,6 +1353,35 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
   }, [supabase]);
 
+  const fetchProfileAvatarsByIds = useCallback(async (ids: string[]) => {
+    const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
+    if (cleanIds.length === 0) {
+      return new Map<string, string>();
+    }
+
+    try {
+      let authHeaders: Record<string, string> | undefined;
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+        if (accessToken) {
+          authHeaders = { Authorization: `Bearer ${accessToken}` };
+        }
+      }
+
+      const response = await fetch("/api/profiles/avatars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
+        body: JSON.stringify({ ids: cleanIds }),
+      });
+      const json = (await response.json()) as { avatars?: Record<string, string> };
+      const avatars = json.avatars ?? {};
+      return new Map(Object.entries(avatars).map(([id, avatarKey]) => [String(id), String(avatarKey).trim()]));
+    } catch {
+      return new Map<string, string>();
+    }
+  }, [supabase]);
+
   const fetchCurrentLugMemberNamesByIds = useCallback(async (ids: string[]) => {
     const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
     if (!supabase || !currentLugId || cleanIds.length === 0) {
@@ -1734,6 +1764,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const raw = String(avatarKey ?? "");
     const maybe = Number(raw.replace("Cabeza_", "").replace(".png", ""));
     return Number.isFinite(maybe) && maybe >= 1 && maybe <= FACE_TOTAL ? maybe : 1;
+  }
+
+  function parseAvatarFaceStrict(avatarKey: string | null | undefined) {
+    const raw = String(avatarKey ?? "");
+    const maybe = Number(raw.replace("Cabeza_", "").replace(".png", ""));
+    return Number.isFinite(maybe) && maybe >= 1 && maybe <= FACE_TOTAL ? maybe : null;
+  }
+
+  function getAvatarFaceForMember(_memberId: string, avatarKey: string | null | undefined) {
+    const explicit = parseAvatarFaceStrict(avatarKey);
+    if (explicit) {
+      return explicit;
+    }
+
+    return 1;
   }
 
   function toColorPickerValue(value: string, fallback: string) {
@@ -5547,10 +5592,13 @@ th{background:#f3f4f6}
     }
 
     const membersRows = (data ?? []) as Array<Record<string, unknown>>;
+    const memberIds = membersRows.map((member) => String(member.id ?? "").trim()).filter(Boolean);
+    const avatarById = await fetchProfileAvatarsByIds(memberIds);
     const members = membersRows
       .map((member) => ({
         id: String(member.id ?? ""),
         full_name: String(member.full_name ?? "Usuario"),
+        avatar_key: avatarById.get(String(member.id ?? "").trim()) || (member.avatar_key ? String(member.avatar_key) : null),
         social_platform: member.social_platform ? String(member.social_platform) : null,
         social_handle: member.social_handle ? String(member.social_handle) : null,
         rol_lug: member.rol_lug ? String(member.rol_lug) : null,
@@ -5817,9 +5865,12 @@ th{background:#f3f4f6}
     }
 
     const membersRows = (membersData ?? []) as Array<Record<string, unknown>>;
+    const memberIds = membersRows.map((member) => String(member.id ?? "").trim()).filter(Boolean);
+    const avatarById = await fetchProfileAvatarsByIds(memberIds);
     const members = membersRows.map((member) => ({
       id: String(member.id),
       full_name: String(member.full_name ?? "Usuario"),
+      avatar_key: avatarById.get(String(member.id ?? "").trim()) || (member.avatar_key ? String(member.avatar_key) : null),
       social_platform: member.social_platform ? String(member.social_platform) : null,
       social_handle: member.social_handle ? String(member.social_handle) : null,
       rol_lug: member.rol_lug ? String(member.rol_lug) : null,
@@ -7163,14 +7214,44 @@ th{background:#f3f4f6}
 
                           return (
                             <div key={member.id} className="rounded-md border border-slate-200 px-3 py-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <p className="truncate text-sm font-semibold text-slate-900">{member.full_name}</p>
-                                  {member.rol_lug === "admin" ? (
-                                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-                                      Admin
-                                    </span>
-                                  ) : null}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 items-start gap-3">
+                                  <div className="h-12 w-12 shrink-0 border border-slate-200 bg-slate-50 p-1">
+                                    <Image
+                                      src={getFaceImagePath(getAvatarFaceForMember(member.id, member.avatar_key))}
+                                      alt={member.full_name}
+                                      width={40}
+                                      height={40}
+                                      unoptimized
+                                      className="h-full w-full object-contain"
+                                    />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <p className="truncate text-sm font-semibold text-slate-900">{member.full_name}</p>
+                                      {member.rol_lug === "admin" ? (
+                                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                                          Admin
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-2">
+                                      <span
+                                        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                                        style={{ backgroundColor: social.bg }}
+                                        title={member.social_platform || "Red social"}
+                                      >
+                                        {social.logo}
+                                      </span>
+                                      {socialUrl ? (
+                                        <a href={socialUrl} target="_blank" rel="noreferrer" className="truncate text-xs font-semibold text-sky-700 hover:underline">
+                                          {socialUrl}
+                                        </a>
+                                      ) : (
+                                        <p className="truncate text-xs text-slate-600">{socialLabel}</p>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                                 {rolLug === "admin" && member.rol_lug !== "admin" && member.id !== userId ? (
                                   <button
@@ -7187,22 +7268,6 @@ th{background:#f3f4f6}
                                     {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
                                   </button>
                                 ) : null}
-                              </div>
-                              <div className="mt-1 flex items-center gap-2">
-                                <span
-                                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
-                                  style={{ backgroundColor: social.bg }}
-                                  title={member.social_platform || "Red social"}
-                                >
-                                  {social.logo}
-                                </span>
-                                {socialUrl ? (
-                                  <a href={socialUrl} target="_blank" rel="noreferrer" className="truncate text-xs font-semibold text-sky-700 hover:underline">
-                                    {socialUrl}
-                                  </a>
-                                ) : (
-                                  <p className="truncate text-xs text-slate-600">{socialLabel}</p>
-                                )}
                               </div>
                             </div>
                           );
@@ -9813,14 +9878,33 @@ th{background:#f3f4f6}
                         <ul className="space-y-2">
                           {lugInfoData.members.map((member) => (
                             <li key={member.id} className="rounded-md border border-slate-200 px-3 py-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <p className="text-sm font-semibold text-slate-900">{member.full_name}</p>
-                                  {member.rol_lug === "admin" ? (
-                                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-                                      Admin
-                                    </span>
-                                  ) : null}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 items-start gap-3">
+                                  <div className="h-12 w-12 shrink-0 border border-slate-200 bg-slate-50 p-1">
+                                    <Image
+                                      src={getFaceImagePath(getAvatarFaceForMember(member.id, member.avatar_key))}
+                                      alt={member.full_name}
+                                      width={40}
+                                      height={40}
+                                      unoptimized
+                                      className="h-full w-full object-contain"
+                                    />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <p className="truncate text-sm font-semibold text-slate-900">{member.full_name}</p>
+                                      {member.rol_lug === "admin" ? (
+                                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                                          Admin
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="mt-1 truncate text-xs text-slate-600">
+                                      {member.social_platform && member.social_handle
+                                        ? `${member.social_platform}: ${member.social_handle}`
+                                        : labels.noSocial}
+                                    </p>
+                                  </div>
                                 </div>
                                 {rolLug === "admin" && currentLugId === lugInfoData.lug_id && member.rol_lug !== "admin" ? (
                                   <button
@@ -9838,11 +9922,6 @@ th{background:#f3f4f6}
                                   </button>
                                 ) : null}
                               </div>
-                              <p className="text-xs text-slate-600">
-                                {member.social_platform && member.social_handle
-                                  ? `${member.social_platform}: ${member.social_handle}`
-                                  : labels.noSocial}
-                              </p>
                             </li>
                           ))}
                         </ul>
