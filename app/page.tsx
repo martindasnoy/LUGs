@@ -1337,6 +1337,33 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return new Map<string, string>();
     }
   }, [supabase]);
+
+  const fetchCurrentLugMemberNamesByIds = useCallback(async (ids: string[]) => {
+    const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
+    if (!supabase || !currentLugId || cleanIds.length === 0) {
+      return new Map<string, string>();
+    }
+
+    const { data, error } = await supabase.rpc("get_lug_members_current", {
+      target_lug_id: currentLugId,
+    });
+
+    if (error) {
+      return new Map<string, string>();
+    }
+
+    const targetSet = new Set(cleanIds);
+    const map = new Map<string, string>();
+    ((data ?? []) as Array<Record<string, unknown>>).forEach((row) => {
+      const id = String(row.id ?? "").trim();
+      const fullName = String(row.full_name ?? "").trim();
+      if (id && fullName && targetSet.has(id)) {
+        map.set(id, fullName);
+      }
+    });
+
+    return map;
+  }, [currentLugId, supabase]);
   const panelFilteredParts = useMemo(() => {
     const looksPrinted = (part: PartCatalogItem) => {
       if (typeof part.is_printed === "boolean") {
@@ -2936,7 +2963,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
         const requesterIds = Array.from(new Set((offersData ?? []).map((row) => String((row as { requester_id?: unknown }).requester_id ?? "")).filter(Boolean)));
         const requesterNameById = await fetchProfileNamesByIds(requesterIds);
-        const lugMemberNameById = new Map((lugInfoData?.members ?? []).map((member) => [member.id, String(member.full_name ?? "").trim()]));
+        const lugMemberNameById = await fetchCurrentLugMemberNamesByIds(requesterIds);
 
         const offersMap: Record<string, WishlistOfferDetail[]> = {};
         (offersData ?? []).forEach((row) => {
@@ -2965,7 +2992,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setListItemsLoading(false);
     },
-    [fetchProfileNamesByIds, labels.noNameFallback, lugInfoData?.members, supabase, t.errorPrefix, userId],
+    [fetchCurrentLugMemberNamesByIds, fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId],
   );
 
   const loadMiLugPools = useCallback(async () => {
@@ -3066,7 +3093,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     ]);
 
     const listMetaById = new Map(publicLists.map((item) => [item.list_id, item]));
-    const lugMemberNameById = new Map((lugInfoData?.members ?? []).map((member) => [member.id, String(member.full_name ?? "").trim()]));
+    const lugMemberNameById = new Map(
+      ((membersData ?? []) as Array<Record<string, unknown>>)
+        .map((member) => [String(member.id ?? "").trim(), String(member.full_name ?? "").trim()] as const)
+        .filter(([id, fullName]) => id && fullName),
+    );
     const partImageByNum = new Map(
       (partsData ?? []).map((row) => [String((row as { part_num?: unknown }).part_num ?? ""), (row as { part_img_url?: unknown }).part_img_url ? String((row as { part_img_url?: unknown }).part_img_url) : null]),
     );
@@ -3185,7 +3216,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMiLugWishlistPage(1);
     setMiLugSalePage(1);
     setMiLugPoolsLoading(false);
-  }, [currentLugId, fetchProfileNamesByIds, labels.noNameFallback, lugInfoData?.members, supabase, t.errorPrefix, userId]);
+  }, [currentLugId, fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
 
   const loadOffersGivenSummary = useCallback(async () => {
     if (!supabase || !userId) {
@@ -3252,13 +3283,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     const ownerIds = Array.from(new Set(Array.from(listOwnerByListId.values()).filter(Boolean)));
     const ownerNamesById = await fetchProfileNamesByIds(ownerIds);
+    const memberNamesById = await fetchCurrentLugMemberNamesByIds(ownerIds);
 
     const rows: OfferSummaryRow[] = (offersData ?? []).map((row) => {
       const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
       const listId = itemListByItemId.get(itemId) ?? "";
       const ownerId = listOwnerByListId.get(listId) ?? "";
       const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
-      const userName = ownerNamesById.get(ownerId) || (ownerId ? `ID ${ownerId.slice(0, 8)}` : labels.noNameFallback);
+      const userName = ownerNamesById.get(ownerId) || memberNamesById.get(ownerId) || (ownerId ? `ID ${ownerId.slice(0, 8)}` : labels.noNameFallback);
       const partLabel = itemLabelByItemId.get(itemId) || "- - Pieza";
 
       return {
@@ -3276,7 +3308,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
     setOffersGivenRows(rows);
     setOffersPanelsLoading(false);
-  }, [fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
+  }, [fetchCurrentLugMemberNamesByIds, fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
 
   const loadOffersReceivedSummary = useCallback(async () => {
     if (!supabase || !userId) {
@@ -3336,12 +3368,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       new Set((offersData ?? []).map((row) => String((row as { requester_id?: unknown }).requester_id ?? "")).filter(Boolean)),
     );
     const requesterNamesById = await fetchProfileNamesByIds(requesterIds);
+    const memberNamesById = await fetchCurrentLugMemberNamesByIds(requesterIds);
 
     const rows: OfferSummaryRow[] = (offersData ?? []).map((row) => {
       const requesterId = String((row as { requester_id?: unknown }).requester_id ?? "");
       const itemId = String((row as { list_item_id?: unknown }).list_item_id ?? "");
       const quantity = Math.max(1, Number((row as { quantity?: unknown }).quantity ?? 1) || 1);
-      const userName = requesterNamesById.get(requesterId) || (requesterId ? `ID ${requesterId.slice(0, 8)}` : labels.noNameFallback);
+      const userName = requesterNamesById.get(requesterId) || memberNamesById.get(requesterId) || (requesterId ? `ID ${requesterId.slice(0, 8)}` : labels.noNameFallback);
       const partLabel = itemLabelById.get(itemId) || "- - Pieza";
 
       return {
@@ -3359,7 +3392,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
     setOffersReceivedRows(rows);
     setOffersPanelsLoading(false);
-  }, [fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
+  }, [fetchCurrentLugMemberNamesByIds, fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId]);
 
   function printOffersSummary(title: string, rows: OfferSummaryRow[]) {
     if (rows.length === 0) {
