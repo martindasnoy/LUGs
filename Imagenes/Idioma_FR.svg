@@ -4,13 +4,13 @@
   <defs>
     <style>
       .st0, .st1 {
-        fill: #a3a39f;
-        font-family: Cubano-Regular, Cubano;
-        font-size: 28.2px;
+        isolation: isolate;
       }
 
       .st1 {
-        display: none;
+        fill: #a3a39f;
+        font-family: Cubano-Regular, Cubano;
+        font-size: 28.2px;
       }
 
       .st2 {
@@ -22,8 +22,7 @@
     </style>
   </defs>
   <path class="st2" d="M36.83,3.74H9.53c-3.36,0-6.09,2.72-6.09,6.09v19.7c0,3.36,2.72,6.09,6.09,6.09h.3v7.87c0,1.71,2.07,2.57,3.28,1.36l9.23-9.23h14.49c3.36,0,6.09-2.72,6.09-6.09V9.83c0-3.36-2.72-6.09-6.09-6.09Z"/>
-  <text class="st0" transform="translate(6.53 29.98)"><tspan x="0" y="0">FR</tspan></text>
-  <text class="st1" transform="translate(6.53 29.98)"><tspan x="0" y="0">PT</tspan></text>
-  <text class="st1" transform="translate(7.53 29.98)"><tspan x="0" y="0">ES</tspan></text>
-  <text class="st1" transform="translate(6.53 29.98)"><tspan x="0" y="0">EN</tspan></text>
+  <g class="st0">
+    <text class="st1" transform="translate(6.53 29.98)"><tspan x="0" y="0">FR</tspan></text>
+  </g>
 </svg>

@@ -76,6 +76,8 @@
   - Adds `parts_import_status` to track pending/imported/empty sets and avoid retrying known-empty imports.
 - `supabase/migrations/0037_add_get_profile_names_by_ids_rpc.sql`
   - Adds a security-definer RPC to resolve profile display names across users for offers/pools UIs.
+- `supabase/migrations/0038_add_dashboard_sections_visibility_to_app_maintenance.sql`
+  - Adds ON/OFF toggles for Dashboard sections (balance, listas, sets, minifiguras).
 
 ## How to run in Supabase dashboard
 
@@ -117,6 +119,7 @@
 36. Run `0035_create_minifig_catalog_sets_and_parts.sql`.
 37. Run `0036_add_parts_import_status_to_minifigure_sets_catalog.sql`.
 38. Run `0037_add_get_profile_names_by_ids_rpc.sql`.
+39. Run `0038_add_dashboard_sections_visibility_to_app_maintenance.sql`.
 
 ## Notes
 

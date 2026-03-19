@@ -66,7 +66,7 @@ type PendingLugAccessAction = {
   lug_name: string;
 };
 
-type AppSection = "dashboard" | "listas" | "lista_detalle" | "mi_lug" | "minifiguras";
+type AppSection = "dashboard" | "listas" | "lista_detalle" | "mi_lug" | "minifiguras" | "configuracion_personal";
 type ListaTipo = "deseos" | "venta";
 type ListaVisibilidad = "privado" | "publico";
 
@@ -275,6 +275,7 @@ type MiLugPoolItem = {
   current_user_offer_quantity: number;
   value: number | null;
   publisher_name: string;
+  imgmatchcolor: boolean;
 };
 
 type WishlistOfferDetail = {
@@ -357,6 +358,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [maintenanceMessageLine1, setMaintenanceMessageLine1] = useState("Estamos en mantenimiento");
   const [maintenanceMessageLine2, setMaintenanceMessageLine2] = useState("Volvé en un rato");
   const [footerLegend, setFooterLegend] = useState("LUGs App");
+  const [dashboardSectionBalanceEnabled, setDashboardSectionBalanceEnabled] = useState(true);
+  const [dashboardSectionListasEnabled, setDashboardSectionListasEnabled] = useState(true);
+  const [dashboardSectionSetsEnabled, setDashboardSectionSetsEnabled] = useState(true);
+  const [dashboardSectionMinifigEnabled, setDashboardSectionMinifigEnabled] = useState(true);
   const [showMaintenancePanel, setShowMaintenancePanel] = useState(false);
   const [maintenanceDraftMessageLine1, setMaintenanceDraftMessageLine1] = useState("");
   const [maintenanceDraftMessageLine2, setMaintenanceDraftMessageLine2] = useState("");
@@ -457,7 +462,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     const stored = window.localStorage.getItem("active_section_v1");
-    if (stored === "listas" || stored === "lista_detalle" || stored === "mi_lug" || stored === "minifiguras") {
+    if (stored === "listas" || stored === "lista_detalle" || stored === "mi_lug" || stored === "minifiguras" || stored === "configuracion_personal") {
       return stored;
     }
     return "dashboard";
@@ -493,6 +498,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [listasItems, setListasItems] = useState<ListaItem[]>([]);
   const [listasLoading, setListasLoading] = useState(false);
   const [listasSaving, setListasSaving] = useState(false);
+  const [dashboardListsCreatedCount, setDashboardListsCreatedCount] = useState(0);
   const [showDeleteListaConfirmPanel, setShowDeleteListaConfirmPanel] = useState(false);
   const [listaToDelete, setListaToDelete] = useState<ListaItem | null>(null);
   const [selectedListForItems, setSelectedListForItems] = useState<ListaItem | null>(null);
@@ -1260,10 +1266,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     () => masterLugs.find((lug) => lug.lug_id === currentLugId) ?? null,
     [masterLugs, currentLugId],
   );
-  const activeLanguageIcon = useMemo(() => {
-    if (language === "en") return "EN";
-    if (language === "pt") return "PT";
-    return "ES";
+  const activeLanguageIconSrc = useMemo(() => {
+    if (language === "en") return "/Idioma_EN.svg";
+    if (language === "pt") return "/Idioma_PT.svg";
+    return "/Idioma_ES.svg";
   }, [language]);
   const mustSelectLugOnDashboard = Boolean(userId && activeSection === "dashboard" && !currentLugId);
   const otherLugs = useMemo(
@@ -1272,6 +1278,14 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   );
   const listasDeseos = useMemo(() => listasItems.filter((item) => item.tipo === "deseos"), [listasItems]);
   const listasVenta = useMemo(() => listasItems.filter((item) => item.tipo === "venta"), [listasItems]);
+  const totalListasCreated = useMemo(
+    () => Math.max(dashboardListsCreatedCount, listasDeseos.length + listasVenta.length),
+    [dashboardListsCreatedCount, listasDeseos.length, listasVenta.length],
+  );
+  const showDashboardBalanceRow = isMaster || dashboardSectionBalanceEnabled;
+  const showDashboardListasRow = isMaster || dashboardSectionListasEnabled;
+  const showDashboardSetsRow = isMaster || dashboardSectionSetsEnabled;
+  const showDashboardMinifigRow = isMaster || dashboardSectionMinifigEnabled;
   const filteredCategories = useMemo(() => {
     const getGroup = (name: string): CategoryQuickFilter => {
       const normalized = name.toLowerCase();
@@ -1840,7 +1854,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     const maintenanceWithFooter = await supabase
       .from("app_maintenance")
-      .select("enabled, message_line1, message_line2, footer_legend")
+      .select("enabled, message_line1, message_line2, footer_legend, show_balance, show_listas, show_sets, show_minifiguras")
       .eq("id", 1)
       .maybeSingle();
 
@@ -1864,6 +1878,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setMaintenanceMessageLine1(String(data?.message_line1 ?? "Estamos en mantenimiento"));
     setMaintenanceMessageLine2(String(data?.message_line2 ?? "Volvé en un rato"));
     setFooterLegend(String((data as { footer_legend?: unknown } | null)?.footer_legend ?? "LUGs App"));
+    setDashboardSectionBalanceEnabled(Boolean((data as { show_balance?: unknown } | null)?.show_balance ?? true));
+    setDashboardSectionListasEnabled(Boolean((data as { show_listas?: unknown } | null)?.show_listas ?? true));
+    setDashboardSectionSetsEnabled(Boolean((data as { show_sets?: unknown } | null)?.show_sets ?? true));
+    setDashboardSectionMinifigEnabled(Boolean((data as { show_minifiguras?: unknown } | null)?.show_minifiguras ?? true));
   }, [supabase, t.errorPrefix]);
 
   function openMaintenancePanel() {
@@ -1992,9 +2010,50 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setStatus(statusText.footerLegendSaved);
   }
 
+  async function saveDashboardSectionsInMaster(nextValues: {
+    show_balance: boolean;
+    show_listas: boolean;
+    show_sets: boolean;
+    show_minifiguras: boolean;
+  }) {
+    if (!supabase) {
+      return;
+    }
+
+    const { error } = await supabase.from("app_maintenance").update(nextValues).eq("id", 1);
+
+    if (
+      error &&
+      (/column\s+"?show_balance"?\s+does not exist/i.test(error.message) ||
+        /column\s+"?show_listas"?\s+does not exist/i.test(error.message) ||
+        /column\s+"?show_sets"?\s+does not exist/i.test(error.message) ||
+        /column\s+"?show_minifiguras"?\s+does not exist/i.test(error.message) ||
+        /could not find the 'show_balance' column/i.test(error.message) ||
+        /could not find the 'show_listas' column/i.test(error.message) ||
+        /could not find the 'show_sets' column/i.test(error.message) ||
+        /could not find the 'show_minifiguras' column/i.test(error.message) ||
+        error.code === "PGRST204")
+    ) {
+      setStatus("Falta migracion de DB para secciones del dashboard (0038_add_dashboard_sections_visibility_to_app_maintenance.sql).");
+      return;
+    }
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      return;
+    }
+
+    setDashboardSectionBalanceEnabled(nextValues.show_balance);
+    setDashboardSectionListasEnabled(nextValues.show_listas);
+    setDashboardSectionSetsEnabled(nextValues.show_sets);
+    setDashboardSectionMinifigEnabled(nextValues.show_minifiguras);
+    setStatus("Secciones del dashboard actualizadas.");
+  }
+
   const loadListasFromDb = useCallback(async () => {
     if (!supabase || !userId) {
       setListasItems([]);
+      setDashboardListsCreatedCount(0);
       return;
     }
 
@@ -2029,6 +2088,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     });
 
     setListasItems(parsed);
+    setDashboardListsCreatedCount(parsed.length);
     setListasLoading(false);
   }, [supabase, t.errorPrefix, userId]);
 
@@ -3202,6 +3262,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         current_user_offer_quantity: currentUserOfferQuantity,
         value: (row as { value?: unknown }).value == null ? null : Number((row as { value?: unknown }).value),
         publisher_name: publisherName,
+        imgmatchcolor: imgMatchColor,
       };
 
       if (listMeta.list_type === "venta") {
@@ -3452,7 +3513,7 @@ th{background:#f3f4f6}
     await loadOffersReceivedSummary();
   }
 
-  async function loadGoBrickColors() {
+  const loadGoBrickColors = useCallback(async () => {
     const response = await fetch("/api/gobrick-colors");
     const json = (await response.json()) as {
       error?: string;
@@ -3468,7 +3529,7 @@ th{background:#f3f4f6}
     setGoBrickColors(parsedColors);
 
     setAddItemColorNameInput(NO_COLOR_LABEL);
-  }
+  }, []);
 
   const openListDetailPage = useCallback(
     async (lista: ListaItem, options?: { navigate?: boolean }) => {
@@ -3507,7 +3568,7 @@ th{background:#f3f4f6}
       }
       await loadListItems(lista.id);
     },
-    [goBrickColors.length, loadListItems, loadPartsCategories, partsCategories.length, router],
+    [goBrickColors.length, loadGoBrickColors, loadListItems, loadPartsCategories, partsCategories.length, router],
   );
 
   const openListDetailById = useCallback(
@@ -4529,6 +4590,41 @@ th{background:#f3f4f6}
   }, [activeSection, openListasSection, userId]);
 
   useEffect(() => {
+    if (!supabase || !userId) {
+      setDashboardListsCreatedCount(0);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const { count } = await supabase
+        .from("lists")
+        .select("list_id", { count: "exact", head: true })
+        .eq("owner_id", userId)
+        .in("list_type", ["deseos", "venta"]);
+
+      if (!cancelled) {
+        setDashboardListsCreatedCount(Number(count ?? 0));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (goBrickColors.length > 0) {
+      return;
+    }
+
+    void loadGoBrickColors();
+  }, [goBrickColors.length, userId, loadGoBrickColors]);
+
+  useEffect(() => {
     if (!userId) {
       return;
     }
@@ -4549,6 +4645,18 @@ th{background:#f3f4f6}
 
     void loadMinifigGlobalOwnedStats();
   }, [activeSection, loadMinifigGlobalOwnedStats, userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (activeSection !== "configuracion_personal") {
+      return;
+    }
+
+    void openUserSettings({ mode: "page", navigate: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, userId]);
 
   useEffect(() => {
     if (!supabase || !userId) {
@@ -5018,9 +5126,17 @@ th{background:#f3f4f6}
     setLanguageChanging(false);
   }
 
-  async function openUserSettings() {
+  async function openUserSettings(options?: { mode?: "popup" | "page"; navigate?: boolean }) {
     if (!supabase || !userId) {
       return;
+    }
+
+    const mode = options?.mode ?? "popup";
+    const shouldNavigate = options?.navigate ?? false;
+
+    if (mode === "page" && shouldNavigate) {
+      router.push("/configuracion-personal");
+      setActiveSection("configuracion_personal");
     }
 
     await ensureProfile(userId, userEmail);
@@ -5068,7 +5184,7 @@ th{background:#f3f4f6}
     setSettingsPasswordInput("");
     setSettingsPasswordConfirmInput("");
     setShowFacePicker(false);
-    setShowUserSettings(true);
+    setShowUserSettings(mode === "popup");
   }
 
   async function saveUserSettings() {
@@ -6874,7 +6990,11 @@ th{background:#f3f4f6}
                           onClick={() => setSelectedMiLugPoolItem({ type: "wishlist", item })}
                           className="rounded-md border border-slate-300 bg-white p-2 text-center"
                         >
-                          <div className="mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50">
+                          <div
+                            className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
+                              item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
+                            }`}
+                          >
                             {item.part_img_url ? (
                               <Image
                                 src={item.part_img_url}
@@ -6884,6 +7004,21 @@ th{background:#f3f4f6}
                                 unoptimized
                                 className="h-[56px] w-[56px] object-contain"
                               />
+                            ) : null}
+                            {!item.imgmatchcolor ? (
+                              <span
+                                className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
+                                title="El color de esta pieza no es el mostrado en la imagen"
+                              >
+                                <Image
+                                  src="/api/avatar/Exclamacion.svg"
+                                  alt="Advertencia"
+                                  width={16}
+                                  height={16}
+                                  unoptimized
+                                  className="h-4 w-4 object-contain"
+                                />
+                              </span>
                             ) : null}
                           </div>
                           <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
@@ -6960,7 +7095,11 @@ th{background:#f3f4f6}
                           className="rounded-md border border-slate-300 bg-white p-2 text-center"
                         >
                           <p className="mb-1 font-boogaloo text-xl leading-none text-emerald-700">{item.value == null ? "$-" : `$${item.value}`}</p>
-                          <div className="mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50">
+                          <div
+                            className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
+                              item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
+                            }`}
+                          >
                             {item.part_img_url ? (
                               <Image
                                 src={item.part_img_url}
@@ -6970,6 +7109,21 @@ th{background:#f3f4f6}
                                 unoptimized
                                 className="h-[56px] w-[56px] object-contain"
                               />
+                            ) : null}
+                            {!item.imgmatchcolor ? (
+                              <span
+                                className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
+                                title="El color de esta pieza no es el mostrado en la imagen"
+                              >
+                                <Image
+                                  src="/api/avatar/Exclamacion.svg"
+                                  alt="Advertencia"
+                                  width={16}
+                                  height={16}
+                                  unoptimized
+                                  className="h-4 w-4 object-contain"
+                                />
+                              </span>
                             ) : null}
                           </div>
                           <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
@@ -7168,7 +7322,11 @@ th{background:#f3f4f6}
                     </div>
 
                     <div className="mt-4 flex items-start gap-3">
-                      <div className="flex h-[110px] w-[110px] items-center justify-center overflow-hidden rounded-md border border-slate-300 bg-slate-50">
+                      <div
+                        className={`relative flex h-[110px] w-[110px] items-center justify-center overflow-hidden rounded-md bg-slate-50 ${
+                          selectedMiLugPoolItem.item.imgmatchcolor ? "border border-slate-300" : "border-2 border-red-500"
+                        }`}
+                      >
                         {selectedMiLugPoolItem.item.part_img_url ? (
                           <Image
                             src={selectedMiLugPoolItem.item.part_img_url}
@@ -7179,9 +7337,41 @@ th{background:#f3f4f6}
                             className="h-[96px] w-[96px] object-contain"
                           />
                         ) : null}
+                        {!selectedMiLugPoolItem.item.imgmatchcolor ? (
+                          <span
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center"
+                            title="El color de esta pieza no es el mostrado en la imagen"
+                          >
+                            <Image
+                              src="/api/avatar/Exclamacion.svg"
+                              alt="Advertencia"
+                              width={18}
+                              height={18}
+                              unoptimized
+                              className="h-[18px] w-[18px] object-contain"
+                            />
+                          </span>
+                        ) : null}
                       </div>
                       <div className="min-w-0 flex-1 space-y-2">
                         <p className="text-base font-semibold text-slate-900">{`${selectedMiLugPoolItem.item.part_num} - ${selectedMiLugPoolItem.item.part_name}`}</p>
+                        <div>
+                          <span
+                            className="inline-flex h-8 min-w-[160px] max-w-[240px] items-center justify-center truncate rounded-md border px-3 text-[12px] font-semibold"
+                            style={(() => {
+                              const colorLabel = selectedMiLugPoolItem.item.color_label;
+                              const colorHex = colorLabel ? colorHexByLabel.get(normalizeColorLabel(colorLabel)) : null;
+                              const bg = colorHex ? `#${colorHex}` : "#f8fafc";
+                              return {
+                                backgroundColor: bg,
+                                color: colorHex ? getContrastTextColor(bg) : "#334155",
+                                borderColor: colorHex ? "#94a3b8" : "#cbd5e1",
+                              };
+                            })()}
+                          >
+                            {selectedMiLugPoolItem.item.color_label || NO_COLOR_LABEL}
+                          </span>
+                        </div>
                         <p className="text-sm text-slate-700">{`${labels.quantityWord}: ${selectedMiLugPoolItem.item.quantity}`}</p>
                         <p className="text-sm text-slate-700">{`${labels.publishedByWord}: ${selectedMiLugPoolItem.item.publisher_name}`}</p>
 
@@ -8241,6 +8431,217 @@ th{background:#f3f4f6}
       );
     }
 
+    if (activeSection === "configuracion_personal") {
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{labels.userSettings}</h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {labels.back}
+                  </button>
+                </div>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+              </header>
+
+              <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5">
+                <div className="mt-1 flex items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewFace(selectedFace);
+                      setShowFacePicker(true);
+                    }}
+                    className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-slate-50 p-1"
+                  >
+                    <Image
+                      src={getFaceImagePath(selectedFace)}
+                      alt={`Cara ${selectedFace}`}
+                      width={56}
+                      height={56}
+                      unoptimized
+                      className="h-full w-full object-contain"
+                    />
+                  </button>
+
+                  <div className="min-w-0 flex-1">
+                    <label className="block text-sm text-slate-700">{labels.name}</label>
+                    <input
+                      type="text"
+                      value={settingsNameInput}
+                      onChange={(event) => setSettingsNameInput(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </div>
+                </div>
+
+                <label className="mt-3 block text-sm text-slate-700">{labels.mail}</label>
+                <input
+                  type="email"
+                  value={settingsEmailInput}
+                  onChange={(event) => setSettingsEmailInput(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordFields((prev) => !prev)}
+                  className="mt-3 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {showPasswordFields ? labels.hidePasswordChange : labels.changePassword}
+                </button>
+
+                {showPasswordFields ? (
+                  <>
+                    <label className="mt-3 block text-sm text-slate-700">{labels.newPassword}</label>
+                    <input
+                      type="password"
+                      value={settingsPasswordInput}
+                      onChange={(event) => setSettingsPasswordInput(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                    <label className="mt-3 block text-sm text-slate-700">{labels.repeatPassword}</label>
+                    <input
+                      type="password"
+                      value={settingsPasswordConfirmInput}
+                      onChange={(event) => setSettingsPasswordConfirmInput(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </>
+                ) : null}
+
+                <label className="mt-3 block text-sm text-slate-700">{labels.lug}</label>
+                <button
+                  type="button"
+                  onClick={() => void openSettingsLugPanel()}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-left"
+                >
+                  {settingsLugName}
+                  {rolLug === "admin" ? " (admin)" : ""}
+                </button>
+
+                <label className="mt-3 block text-sm text-slate-700">{labels.socialNetwork}</label>
+                <div className="mt-1 grid grid-cols-[140px_minmax(0,1fr)] gap-2">
+                  <select
+                    value={settingsSocialPlatform}
+                    onChange={(event) => setSettingsSocialPlatform(event.target.value as SocialPlatform)}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    <option value="instagram">Instagram</option>
+                    <option value="facebook">Facebook</option>
+                    <option value="">{labels.none}</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={settingsSocialHandle}
+                    onChange={(event) => setSettingsSocialHandle(event.target.value)}
+                    placeholder={labels.userPlaceholder}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </div>
+
+                <label className="mt-3 block text-sm text-slate-700">{t.language}</label>
+                <select
+                  value={settingsLanguageInput}
+                  onChange={(event) => setSettingsLanguageInput(event.target.value as UiLanguage)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                >
+                  {uiLanguages.map((option) => (
+                    <option key={option} value={option}>
+                      {uiLanguageLabels[option]}
+                    </option>
+                  ))}
+                </select>
+
+                {showFacePicker ? (
+                  <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4"
+                    onClick={() => setShowFacePicker(false)}
+                  >
+                    <div className="w-full max-w-sm rounded-xl bg-white p-4" onClick={(event) => event.stopPropagation()}>
+                      <p className="text-sm text-slate-700">{labels.doubleClickSelect}</p>
+                      <div className="mt-3 grid grid-cols-5 gap-1.5">
+                        {Array.from({ length: FACE_TOTAL }, (_, index) => {
+                          const faceNum = index + 1;
+                          const isPreview = previewFace === faceNum;
+                          return (
+                            <button
+                              key={faceNum}
+                              type="button"
+                              onClick={() => setPreviewFace(faceNum)}
+                              onDoubleClick={() => {
+                                setSelectedFace(faceNum);
+                                setPreviewFace(faceNum);
+                                setShowFacePicker(false);
+                              }}
+                              className={`flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border p-0.5 ${isPreview ? "border-[#006eb2] bg-[#cfeeff]" : "border-slate-200 bg-slate-50"}`}
+                            >
+                              <Image
+                                src={getFaceImagePath(faceNum)}
+                                alt={`Cara ${faceNum}`}
+                                width={52}
+                                height={52}
+                                unoptimized
+                                className="h-full w-full object-contain"
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFacePicker(false);
+                      setShowPasswordFields(false);
+                      setSettingsPasswordInput("");
+                      setSettingsPasswordConfirmInput("");
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm"
+                  >
+                    {labels.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveUserSettings()}
+                    disabled={settingsSaving}
+                    className="rounded-md border px-4 py-2 text-sm font-semibold"
+                    style={{
+                      backgroundColor: uiColor1,
+                      color: uiColor1Text,
+                      borderColor: uiColor3,
+                    }}
+                  >
+                    {settingsSaving ? labels.saving : labels.save}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-2 w-full px-2 text-center">
+            <p className="mx-auto inline-block px-2 text-xs font-semibold tracking-wide" style={{ color: "#a8a8a8" }}>
+              {footerLegend || "LUGs App"}
+            </p>
+          </div>
+        </main>
+      );
+    }
+
     return (
       <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
         <div className="mx-auto w-full max-w-[800px]">
@@ -8277,12 +8678,11 @@ th{background:#f3f4f6}
                     <button
                       type="button"
                       onClick={() => setShowLanguagePickerPopup(true)}
-                      className="relative inline-flex h-8 min-w-8 items-center justify-center rounded-full border-2 border-emerald-500 bg-white px-2 text-xs font-bold tracking-wide text-slate-800"
+                      className="inline-flex h-8 min-w-8 items-center justify-center"
                       title={uiLanguageLabels[language]}
                       aria-label={t.language}
                     >
-                      {activeLanguageIcon}
-                      <span className="pointer-events-none absolute -bottom-[4px] right-[4px] h-2.5 w-2.5 rotate-45 border-b-2 border-r-2 border-emerald-500 bg-white" />
+                      <Image src={activeLanguageIconSrc} alt={uiLanguageLabels[language]} width={22} height={22} unoptimized className="h-[22px] w-[22px] object-contain" />
                     </button>
                     {isMaster && masterEmptyNotificationsCount > 0 ? (
                       <button
@@ -8317,18 +8717,6 @@ th{background:#f3f4f6}
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-black">
                     <button
                       type="button"
-                      aria-label={t.settingsAria}
-                      title={t.settingsTitle}
-                      onClick={() => void openUserSettings()}
-                      className="rounded-md border border-black/20 p-2"
-                    >
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 1-2 0 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 1 0-2 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6c.38 0 .75-.14 1-.4a1.7 1.7 0 0 1 2 0c.25.26.62.4 1 .4a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c0 .38.14.75.4 1a1.7 1.7 0 0 1 0 2c-.26.25-.4.62-.4 1Z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
                       onClick={handleLogout}
                       disabled={loading}
                       className="rounded-md border border-black/20 px-3 py-1 text-sm"
@@ -8342,117 +8730,136 @@ th{background:#f3f4f6}
 
             <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
 
-            <div className="mt-3 flex w-full flex-col items-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  void openListasSection();
-                }}
-                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
-                style={{ borderColor: currentLugColor2 || "#ffffff" }}
-                title="Listas"
-              >
-                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
-                  <Image
-                    src="/api/avatar/Listas.png?v=20260314"
-                    alt="Listas"
-                    width={200}
-                    height={200}
-                    unoptimized
-                    className="h-full w-full object-contain"
-                  />
-                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cubano-title text-xl font-semibold tracking-wide text-black">
-                    <span className="relative inline-block">
-                      <span className="absolute inset-0 text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
-                        LISTAS
+            <div className="mt-3 grid w-full grid-cols-1 items-start gap-3 min-[800px]:grid-cols-3">
+              <div className="grid w-full grid-cols-1 content-start gap-3 self-start min-[800px]:col-span-2">
+                <button
+                  type="button"
+                  onDoubleClick={() => void openUserSettings({ mode: "page", navigate: true })}
+                  className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                  title="Configuración personal"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-slate-900">Configuración personal</p>
+                  </div>
+                </button>
+
+                {showDashboardBalanceRow ? (
+                  <button
+                    type="button"
+                    onDoubleClick={() => setStatus("Balance de usuario disponible próximamente.")}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                    title="Balance de usuario"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-slate-900">Balance de usuario</p>
+                    </div>
+                  </button>
+                ) : null}
+
+                {showDashboardListasRow ? (
+                  <button
+                    type="button"
+                    onDoubleClick={() => {
+                      void openListasSection();
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                    title="Listas"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-slate-900">Mis listas</p>
+                      <p className="text-sm text-slate-600">{`${totalListasCreated} listas creadas`}</p>
+                    </div>
+                  </button>
+                ) : null}
+
+                {showDashboardSetsRow ? (
+                  <button
+                    type="button"
+                    onDoubleClick={() => setStatus("Sets disponible próximamente.")}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                    title="Sets"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-slate-900">Mis sets</p>
+                      <p className="text-sm text-slate-600">Coleccion y wishlist de sets</p>
+                    </div>
+                  </button>
+                ) : null}
+
+                {showDashboardMinifigRow ? (
+                  <button
+                    type="button"
+                    onDoubleClick={() => {
+                      void openMinifigurasSection();
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-slate-900">Mis minfiguras</p>
+                      <p className="text-sm text-slate-600">Colección y seguimiento de tus CMF</p>
+                    </div>
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="flex w-full flex-col gap-2 min-[800px]:col-span-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    router.push("/mi-lug");
+                    setActiveSection("mi_lug");
+                  }}
+                  className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
+                  style={{ borderColor: currentLugColor2 || "#ffffff" }}
+                  title="Mi LUG"
+                >
+                  {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
+                    <Image
+                      src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
+                      alt={currentUserLug?.nombre || "Logo LUG"}
+                      width={200}
+                      height={200}
+                      unoptimized
+                      className="h-[88%] w-[88%] object-contain"
+                    />
+                  ) : (
+                    "X"
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLugsPanel(true);
+                    void loadMasterLugs();
+                    if (userId) {
+                      void loadMyJoinRequests(userId);
+                    }
+                  }}
+                  className="flex aspect-[5/3] w-full flex-col items-center justify-center rounded-lg border-2 bg-white"
+                  style={{ borderColor: currentLugColor2 || "#ffffff" }}
+                  title="Ver LUGs"
+                >
+                  <div className="relative flex h-[88%] w-[88%] items-center justify-center">
+                    <Image
+                      src="/api/avatar/Mundo.png?v=20260314"
+                      alt="Ver LUGs"
+                      width={200}
+                      height={200}
+                      unoptimized
+                      className="h-full w-full object-contain"
+                    />
+                    <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cubano-title text-xl font-semibold tracking-wide text-black">
+                      <span className="relative inline-block">
+                        <span className="absolute inset-0 text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
+                          LUGs
+                        </span>
+                        <span className="relative text-black">{labels.buttonLugs}</span>
                       </span>
-                      <span className="relative text-black">{labels.buttonLists}</span>
                     </span>
-                  </span>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void openMinifigurasSection();
-                }}
-                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center font-cubano-title text-lg font-semibold text-black"
-                style={{ borderColor: currentLugColor2 || "#ffffff" }}
-              >
-                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
-                  <Image
-                    src="/api/avatar/minifiguras.png?v=20260314"
-                    alt="Minifiguras"
-                    width={200}
-                    height={200}
-                    unoptimized
-                    className="h-full w-full object-contain"
-                  />
-                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <span className="relative inline-block">
-                      <span className="absolute inset-0 font-cubano-title text-lg font-semibold tracking-wide text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
-                        minifiguras
-                      </span>
-                      <span className="relative font-cubano-title text-lg font-semibold tracking-wide text-black">{labels.buttonMinifig}</span>
-                    </span>
-                  </span>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  router.push("/mi-lug");
-                  setActiveSection("mi_lug");
-                }}
-                className="flex aspect-[5/3] w-full max-w-[260px] items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
-                style={{ borderColor: currentLugColor2 || "#ffffff" }}
-                title="Mi LUG"
-              >
-                {currentLugLogoDataUrl || currentUserLug?.logo_data_url ? (
-                  <Image
-                    src={currentLugLogoDataUrl || currentUserLug?.logo_data_url || ""}
-                    alt={currentUserLug?.nombre || "Logo LUG"}
-                    width={200}
-                    height={200}
-                    unoptimized
-                    className="h-[88%] w-[88%] object-contain"
-                  />
-                ) : (
-                  "X"
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLugsPanel(true);
-                  void loadMasterLugs();
-                  if (userId) {
-                    void loadMyJoinRequests(userId);
-                  }
-                }}
-                className="flex aspect-[5/3] w-full max-w-[260px] flex-col items-center justify-center rounded-lg border-2 bg-white"
-                style={{ borderColor: currentLugColor2 || "#ffffff" }}
-                title="Ver LUGs"
-              >
-                <div className="relative flex h-[88%] w-[88%] items-center justify-center">
-                  <Image
-                    src="/api/avatar/Mundo.png?v=20260314"
-                    alt="Ver LUGs"
-                    width={200}
-                    height={200}
-                    unoptimized
-                    className="h-full w-full object-contain"
-                  />
-                  <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cubano-title text-xl font-semibold tracking-wide text-black">
-                    <span className="relative inline-block">
-                      <span className="absolute inset-0 text-transparent" style={{ WebkitTextStroke: "3px #ffffff" }} aria-hidden>
-                        LUGs
-                      </span>
-                      <span className="relative text-black">{labels.buttonLugs}</span>
-                    </span>
-                  </span>
-                </div>
-              </button>
+                  </div>
+                </button>
+              </div>
             </div>
           </header>
           </div>
@@ -8974,6 +9381,94 @@ th{background:#f3f4f6}
                       className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
                     >
                       {labels.footerLegendSave}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-slate-200 p-4">
+                <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                  Secciones
+                </h4>
+
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                    <span className="text-sm text-slate-800">Balance</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void saveDashboardSectionsInMaster({
+                          show_balance: !dashboardSectionBalanceEnabled,
+                          show_listas: dashboardSectionListasEnabled,
+                          show_sets: dashboardSectionSetsEnabled,
+                          show_minifiguras: dashboardSectionMinifigEnabled,
+                        })
+                      }
+                      className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                        dashboardSectionBalanceEnabled ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600"
+                      }`}
+                    >
+                      {dashboardSectionBalanceEnabled ? "ON" : "OFF"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                    <span className="text-sm text-slate-800">Listas</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void saveDashboardSectionsInMaster({
+                          show_balance: dashboardSectionBalanceEnabled,
+                          show_listas: !dashboardSectionListasEnabled,
+                          show_sets: dashboardSectionSetsEnabled,
+                          show_minifiguras: dashboardSectionMinifigEnabled,
+                        })
+                      }
+                      className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                        dashboardSectionListasEnabled ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600"
+                      }`}
+                    >
+                      {dashboardSectionListasEnabled ? "ON" : "OFF"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                    <span className="text-sm text-slate-800">Sets</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void saveDashboardSectionsInMaster({
+                          show_balance: dashboardSectionBalanceEnabled,
+                          show_listas: dashboardSectionListasEnabled,
+                          show_sets: !dashboardSectionSetsEnabled,
+                          show_minifiguras: dashboardSectionMinifigEnabled,
+                        })
+                      }
+                      className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                        dashboardSectionSetsEnabled ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600"
+                      }`}
+                    >
+                      {dashboardSectionSetsEnabled ? "ON" : "OFF"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                    <span className="text-sm text-slate-800">Minifiguras</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void saveDashboardSectionsInMaster({
+                          show_balance: dashboardSectionBalanceEnabled,
+                          show_listas: dashboardSectionListasEnabled,
+                          show_sets: dashboardSectionSetsEnabled,
+                          show_minifiguras: !dashboardSectionMinifigEnabled,
+                        })
+                      }
+                      className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                        dashboardSectionMinifigEnabled ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600"
+                      }`}
+                    >
+                      {dashboardSectionMinifigEnabled ? "ON" : "OFF"}
                     </button>
                   </div>
                 </div>
