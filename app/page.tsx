@@ -97,6 +97,21 @@ type MinifigFigurePartItem = {
   quantity: number;
 };
 
+type MinifigMissingAnalysisRow = {
+  set_num: string;
+  part_num: string;
+  part_name: string;
+  color_name: string;
+  missing_quantity: number;
+};
+
+type MinifigMissingAnalysisResult = {
+  missingBySetNum: Record<string, boolean>;
+  missingPieceCount: number;
+  missingRows: MinifigMissingAnalysisRow[];
+  hadError: boolean;
+};
+
 type MinifigFiguresFilter = "all" | "missing" | "complete" | "favorite";
 
 type ListaItem = {
@@ -300,6 +315,7 @@ type CategoryQuickFilter = "all" | "popular" | "minifig" | "technic" | "otros";
 type RolLug = "admin" | "common" | null;
 
 const FACE_TOTAL = 20;
+const AUTO_MINIFIG_MISSING_LIST_NAME = "Faltantes de CMF";
 const DEFAULT_LOADING_PHRASES = [
   "Clasificando piezas",
   "Desarmando sets",
@@ -484,6 +500,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [minifigSearchQuery, setMinifigSearchQuery] = useState("");
   const [minifigSearchResults, setMinifigSearchResults] = useState<MinifigFigureItem[]>([]);
   const [minifigSearchLoading, setMinifigSearchLoading] = useState(false);
+  const [minifigMissingWishlistSyncing, setMinifigMissingWishlistSyncing] = useState(false);
   const [selectedMinifigForImagePopup, setSelectedMinifigForImagePopup] = useState<MinifigFigureItem | null>(null);
   const [showMinifigPartsPopup, setShowMinifigPartsPopup] = useState(false);
   const [selectedMinifigForParts, setSelectedMinifigForParts] = useState<MinifigFigureItem | null>(null);
@@ -494,6 +511,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [minifigMissingPartsPreviewBySetNum, setMinifigMissingPartsPreviewBySetNum] = useState<Record<string, MinifigFigurePartItem[]>>({});
   const [minifigMissingPartsPreviewLoadingBySetNum, setMinifigMissingPartsPreviewLoadingBySetNum] = useState<Record<string, boolean>>({});
   const [minifigGlobalOwnedStats, setMinifigGlobalOwnedStats] = useState({ complete: 0, missing: 0, total: 0, favorites: 0 });
+  const [minifigContextMissingPiecesCount, setMinifigContextMissingPiecesCount] = useState(0);
   const [showCreateListaPanel, setShowCreateListaPanel] = useState(false);
   const [newListaTipo, setNewListaTipo] = useState<ListaTipo>("deseos");
   const [newListaNombre, setNewListaNombre] = useState("");
@@ -2196,12 +2214,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   }
 
   function openDeleteListaConfirm(item: ListaItem) {
+    if (item.nombre === AUTO_MINIFIG_MISSING_LIST_NAME) {
+      setStatus("La lista automatica de CMF no se puede borrar.");
+      return;
+    }
     setListaToDelete(item);
     setShowDeleteListaConfirmPanel(true);
   }
 
   async function deleteListaConfirmed() {
     if (!supabase || !userId || !listaToDelete) {
+      return;
+    }
+
+    if (listaToDelete.nombre === AUTO_MINIFIG_MISSING_LIST_NAME) {
+      setStatus("La lista automatica de CMF no se puede borrar.");
       return;
     }
 
@@ -2257,6 +2284,137 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setActiveSection("listas");
     await Promise.all([loadListasFromDb(), loadPartsCategories()]);
   }, [loadListasFromDb, loadPartsCategories, router]);
+
+  const loadMinifigMissingAnalysisBySetNums = useCallback(
+    async (setNums: string[]): Promise<MinifigMissingAnalysisResult> => {
+      const uniqueSetNums = Array.from(new Set(setNums.map((setNum) => String(setNum).trim()).filter(Boolean)));
+      const missingBySetNum: Record<string, boolean> = {};
+      for (const setNum of uniqueSetNums) {
+        missingBySetNum[setNum] = false;
+      }
+
+      if (!supabase || !userId || uniqueSetNums.length === 0) {
+        return {
+          missingBySetNum,
+          missingPieceCount: 0,
+          missingRows: [],
+          hadError: false,
+        };
+      }
+
+      const [{ data: requiredRows, error: requiredError }, { data: ownedRows, error: ownedError }] = await Promise.all([
+        supabase
+          .from("minifigure_set_parts_catalog")
+          .select("set_num, part_num, part_name, color_name, quantity")
+          .in("set_num", uniqueSetNums),
+        supabase
+          .from("minifig_user_part_inventory")
+          .select("set_num, part_num, color_name, owned_quantity")
+          .eq("user_id", userId)
+          .in("set_num", uniqueSetNums),
+      ]);
+
+      if (requiredError) {
+        setStatus(`${t.errorPrefix}: ${requiredError.message}`);
+        return {
+          missingBySetNum,
+          missingPieceCount: 0,
+          missingRows: [],
+          hadError: true,
+        };
+      }
+
+      if (ownedError) {
+        setStatus(`${t.errorPrefix}: ${ownedError.message}`);
+        return {
+          missingBySetNum,
+          missingPieceCount: 0,
+          missingRows: [],
+          hadError: true,
+        };
+      }
+
+      const ownedByKey = new Map<string, number>();
+      const setsWithTrackedParts = new Set<string>();
+      for (const row of ownedRows ?? []) {
+        const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
+        const partNum = String((row as { part_num?: unknown }).part_num ?? "").trim();
+        const colorName = String((row as { color_name?: unknown }).color_name ?? "").trim();
+        const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+        if (!setNum || !partNum) continue;
+        setsWithTrackedParts.add(setNum);
+        const key = `${setNum}::${partNum}::${colorName}`;
+        ownedByKey.set(key, (ownedByKey.get(key) ?? 0) + ownedQty);
+      }
+
+      const requiredByKey = new Map<string, { set_num: string; part_num: string; part_name: string; color_name: string; quantity: number }>();
+      for (const row of requiredRows ?? []) {
+        const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
+        const partNum = String((row as { part_num?: unknown }).part_num ?? "").trim();
+        const partName = String((row as { part_name?: unknown }).part_name ?? partNum).trim();
+        const colorName = String((row as { color_name?: unknown }).color_name ?? "").trim();
+        const requiredQty = Math.max(0, Number((row as { quantity?: unknown }).quantity ?? 0) || 0);
+        if (!setNum || !partNum || requiredQty <= 0) continue;
+
+        const key = `${setNum}::${partNum}::${colorName}`;
+        const current = requiredByKey.get(key);
+        if (current) {
+          current.quantity += requiredQty;
+          if (!current.part_name && partName) {
+            current.part_name = partName;
+          }
+        } else {
+          requiredByKey.set(key, {
+            set_num: setNum,
+            part_num: partNum,
+            part_name: partName || partNum,
+            color_name: colorName,
+            quantity: requiredQty,
+          });
+        }
+      }
+
+      let missingPieceCount = 0;
+      const missingRows: MinifigMissingAnalysisRow[] = [];
+      for (const row of requiredByKey.values()) {
+        const isTrackedSet = setsWithTrackedParts.has(row.set_num);
+        const ownedQty = ownedByKey.get(`${row.set_num}::${row.part_num}::${row.color_name}`) ?? (isTrackedSet ? 0 : row.quantity);
+        const missingQty = Math.max(0, row.quantity - ownedQty);
+        if (missingQty <= 0) {
+          continue;
+        }
+
+        missingBySetNum[row.set_num] = true;
+        missingPieceCount += missingQty;
+        missingRows.push({
+          set_num: row.set_num,
+          part_num: row.part_num,
+          part_name: row.part_name || row.part_num,
+          color_name: row.color_name,
+          missing_quantity: missingQty,
+        });
+      }
+
+      return {
+        missingBySetNum,
+        missingPieceCount,
+        missingRows,
+        hadError: false,
+      };
+    },
+    [supabase, t.errorPrefix, userId],
+  );
+
+  const computeMinifigMissingBySetNums = useCallback(
+    async (setNums: string[]) => {
+      const result = await loadMinifigMissingAnalysisBySetNums(setNums);
+      if (result.hadError) {
+        return {} as Record<string, boolean>;
+      }
+      return result.missingBySetNum;
+    },
+    [loadMinifigMissingAnalysisBySetNums],
+  );
 
   const loadCollectibleSeries = useCallback(async () => {
     setMinifigSeriesLoading(true);
@@ -2352,32 +2510,22 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           }
 
           const setNums = Array.from(allSetNums);
-          const [inventoryResult, partInventoryResult] = await Promise.all([
+          const [{ data: inventoryData, error: inventoryError }, missingAnalysis] = await Promise.all([
             setNums.length > 0
               ? supabase.from("minifig_user_inventory").select("set_num, is_owned").eq("user_id", userId).in("set_num", setNums)
               : Promise.resolve({ data: [], error: null }),
-            setNums.length > 0
-              ? supabase.from("minifig_user_part_inventory").select("set_num, owned_quantity").eq("user_id", userId).in("set_num", setNums)
-              : Promise.resolve({ data: [], error: null }),
+            loadMinifigMissingAnalysisBySetNums(setNums),
           ]);
 
+          if (inventoryError) {
+            setStatus(`${t.errorPrefix}: ${inventoryError.message}`);
+          }
+
           const ownedBySetNum = new Map<string, boolean>();
-          for (const row of inventoryResult.data ?? []) {
+          for (const row of inventoryData ?? []) {
             const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
             if (!setNum) continue;
             ownedBySetNum.set(setNum, Boolean((row as { is_owned?: unknown }).is_owned));
-          }
-
-          const missingBySetNum = new Map<string, boolean>();
-          for (const row of partInventoryResult.data ?? []) {
-            const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
-            if (!setNum) continue;
-            const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
-            if (ownedQty <= 0) {
-              missingBySetNum.set(setNum, true);
-            } else if (!missingBySetNum.has(setNum)) {
-              missingBySetNum.set(setNum, false);
-            }
           }
 
           const progressByThemeId: Record<number, { owned: number; total: number }> = {};
@@ -2385,7 +2533,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
             const setNumsForSeries = Array.from(setsByThemeId.get(series.id) ?? new Set<string>());
             const owned = setNumsForSeries.reduce((acc, setNum) => {
               const isOwned = Boolean(ownedBySetNum.get(setNum));
-              const hasMissing = Boolean(missingBySetNum.get(setNum));
+              const hasMissing = Boolean(missingAnalysis.missingBySetNum[setNum]);
               return isOwned || hasMissing ? acc + 1 : acc;
             }, 0);
             progressByThemeId[series.id] = {
@@ -2403,11 +2551,29 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       setMinifigSeriesRows([]);
       setMinifigSeriesLoading(false);
     }
-  }, [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId]);
+  }, [getSupabaseAuthHeaders, loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
 
   const checkedMinifigSeriesIds = useMemo(
     () => Object.entries(minifigSeriesCheckedById).filter(([, checked]) => checked).map(([id]) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
     [minifigSeriesCheckedById],
+  );
+  const minifigContextFigureSetNums = useMemo(() => {
+    if (minifigSearchQuery.trim().length > 0) {
+      return Array.from(new Set(minifigSearchResults.map((fig) => fig.set_num).filter(Boolean)));
+    }
+
+    const setNums = checkedMinifigSeriesIds.flatMap((seriesId) =>
+      (minifigFiguresBySeriesId[seriesId] ?? []).map((fig) => fig.set_num).filter(Boolean),
+    );
+    return Array.from(new Set(setNums));
+  }, [checkedMinifigSeriesIds, minifigFiguresBySeriesId, minifigSearchQuery, minifigSearchResults]);
+  const minifigContextMissingFiguresCount = useMemo(
+    () => minifigContextFigureSetNums.reduce((acc, setNum) => (minifigSetHasMissingPartsBySetNum[setNum] ? acc + 1 : acc), 0),
+    [minifigContextFigureSetNums, minifigSetHasMissingPartsBySetNum],
+  );
+  const minifigContextMissingSetNums = useMemo(
+    () => minifigContextFigureSetNums.filter((setNum) => Boolean(minifigSetHasMissingPartsBySetNum[setNum])),
+    [minifigContextFigureSetNums, minifigSetHasMissingPartsBySetNum],
   );
   const popupVisibleSeriesRows = useMemo(
     () => (showOnlyFavoriteSeries ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id])) : minifigSeriesRows),
@@ -2454,27 +2620,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       if (userId && rows.length > 0) {
         const setNums = Array.from(new Set(rows.map((row) => row.set_num)));
-        const [{ data: inventoryData }, { data: partInventoryData }] = await Promise.all([
+        const [{ data: inventoryData }, missingPartsMap] = await Promise.all([
           supabase.from("minifig_user_inventory").select("set_num, is_owned, is_favorite").eq("user_id", userId).in("set_num", setNums),
-          supabase.from("minifig_user_part_inventory").select("set_num, owned_quantity").eq("user_id", userId).in("set_num", setNums),
+          computeMinifigMissingBySetNums(setNums),
         ]);
 
         const ownedMap: Record<string, boolean> = {};
         const favoriteMap: Record<string, boolean> = {};
-        const missingPartsMap: Record<string, boolean> = {};
         for (const row of inventoryData ?? []) {
           const setNum = String((row as { set_num?: unknown }).set_num ?? "");
           ownedMap[setNum] = Boolean((row as { is_owned?: unknown }).is_owned);
           favoriteMap[setNum] = Boolean((row as { is_favorite?: unknown }).is_favorite);
-        }
-        for (const row of partInventoryData ?? []) {
-          const setNum = String((row as { set_num?: unknown }).set_num ?? "");
-          const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
-          if (ownedQty <= 0) {
-            missingPartsMap[setNum] = true;
-          } else if (missingPartsMap[setNum] == null) {
-            missingPartsMap[setNum] = false;
-          }
         }
         setMinifigFigureCheckedBySetNum((prev) => ({ ...prev, ...ownedMap }));
         setMinifigFigureFavoriteBySetNum((prev) => ({ ...prev, ...favoriteMap }));
@@ -2483,7 +2639,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setMinifigSearchLoading(false);
     },
-    [supabase, t.errorPrefix, userId],
+    [computeMinifigMissingBySetNums, supabase, t.errorPrefix, userId],
   );
 
   const loadMinifigGlobalOwnedStats = useCallback(async () => {
@@ -2520,30 +2676,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return;
     }
 
-    const { data: partRows, error: partsError } = await supabase
-      .from("minifig_user_part_inventory")
-      .select("set_num, owned_quantity")
-      .eq("user_id", userId)
-      .in("set_num", ownedSetNums);
-
-    if (partsError) {
-      setStatus(`${t.errorPrefix}: ${partsError.message}`);
+    const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(ownedSetNums);
+    if (missingAnalysis.hadError) {
       return;
     }
 
-    const missingSetNums = new Set<string>();
-    for (const row of partRows ?? []) {
-      const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
-      if (ownedQty <= 0) {
-        missingSetNums.add(String((row as { set_num?: unknown }).set_num ?? ""));
-      }
-    }
-
     const total = ownedSetNums.length;
-    const missing = missingSetNums.size;
-    const complete = Math.max(0, total - missing);
+    const missingSetCount = Object.values(missingAnalysis.missingBySetNum).reduce((acc, hasMissing) => (hasMissing ? acc + 1 : acc), 0);
+    const complete = Math.max(0, total - missingSetCount);
+    const missing = missingSetCount;
     setMinifigGlobalOwnedStats({ complete, missing, total, favorites });
-  }, [supabase, t.errorPrefix, userId]);
+  }, [loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
 
   const saveMinifigUiPreferences = useCallback(
     async (patch: { show_only_favorite_series?: boolean; show_only_favorite_figures?: boolean }) => {
@@ -2711,34 +2854,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
         if (supabase && userId && rows.length > 0) {
           const setNums = Array.from(new Set(rows.map((row) => row.set_num)));
-          const { data: inventoryData } = await supabase
-            .from("minifig_user_inventory")
-            .select("set_num, is_owned, is_favorite")
-            .eq("user_id", userId)
-            .in("set_num", setNums);
-
-          const { data: partInventoryData } = await supabase
-            .from("minifig_user_part_inventory")
-            .select("set_num, owned_quantity")
-            .eq("user_id", userId)
-            .in("set_num", setNums);
+          const [{ data: inventoryData }, missingPartsMap] = await Promise.all([
+            supabase
+              .from("minifig_user_inventory")
+              .select("set_num, is_owned, is_favorite")
+              .eq("user_id", userId)
+              .in("set_num", setNums),
+            computeMinifigMissingBySetNums(setNums),
+          ]);
 
           const ownedMap: Record<string, boolean> = {};
           const favoriteMap: Record<string, boolean> = {};
-          const missingPartsMap: Record<string, boolean> = {};
           for (const row of inventoryData ?? []) {
             const setNum = String((row as { set_num?: unknown }).set_num ?? "");
             ownedMap[setNum] = Boolean((row as { is_owned?: unknown }).is_owned);
             favoriteMap[setNum] = Boolean((row as { is_favorite?: unknown }).is_favorite);
-          }
-          for (const row of partInventoryData ?? []) {
-            const setNum = String((row as { set_num?: unknown }).set_num ?? "");
-            const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
-            if (ownedQty <= 0) {
-              missingPartsMap[setNum] = true;
-            } else if (missingPartsMap[setNum] == null) {
-              missingPartsMap[setNum] = false;
-            }
           }
           setMinifigFigureCheckedBySetNum((prev) => ({ ...prev, ...ownedMap }));
           setMinifigFigureFavoriteBySetNum((prev) => ({ ...prev, ...favoriteMap }));
@@ -2759,7 +2889,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: false }));
       }
     },
-    [getSupabaseAuthHeaders, loadMissingPartsPreviewForSet, minifigFiguresLoadingBySeriesId, supabase, t.errorPrefix, userId],
+    [computeMinifigMissingBySetNums, getSupabaseAuthHeaders, loadMissingPartsPreviewForSet, minifigFiguresLoadingBySeriesId, supabase, t.errorPrefix, userId],
   );
 
   const saveMinifigSetOwnedState = useCallback(
@@ -3002,6 +3132,132 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     },
     [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId],
   );
+
+  const syncAutoMinifigMissingWishlist = useCallback(async (setNumsForSync?: string[]) => {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setMinifigMissingWishlistSyncing(true);
+
+    try {
+      const aggregate = new Map<string, { part_num: string; part_name: string; color_name: string; quantity: number }>();
+
+      let targetSetNums = Array.from(new Set((setNumsForSync ?? []).map((setNum) => String(setNum).trim()).filter(Boolean)));
+      if (targetSetNums.length === 0) {
+        const [{ data: ownedSetRows, error: ownedSetError }, { data: partSetRows, error: partSetError }] = await Promise.all([
+          supabase.from("minifig_user_inventory").select("set_num").eq("user_id", userId).eq("is_owned", true),
+          supabase.from("minifig_user_part_inventory").select("set_num").eq("user_id", userId),
+        ]);
+
+        if (ownedSetError) {
+          setStatus(`${t.errorPrefix}: ${ownedSetError.message}`);
+          setMinifigMissingWishlistSyncing(false);
+          return;
+        }
+
+        if (partSetError) {
+          setStatus(`${t.errorPrefix}: ${partSetError.message}`);
+          setMinifigMissingWishlistSyncing(false);
+          return;
+        }
+
+        targetSetNums = Array.from(
+          new Set(
+            [...(ownedSetRows ?? []), ...(partSetRows ?? [])]
+              .map((row) => String((row as { set_num?: unknown }).set_num ?? "").trim())
+              .filter(Boolean),
+          ),
+        );
+      }
+
+      const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(targetSetNums);
+      if (missingAnalysis.hadError) {
+        setMinifigMissingWishlistSyncing(false);
+        return;
+      }
+
+      for (const row of missingAnalysis.missingRows) {
+        const aggregateKey = `${row.part_num}::${row.color_name}`;
+        const current = aggregate.get(aggregateKey);
+        if (current) {
+          current.quantity += row.missing_quantity;
+        } else {
+          aggregate.set(aggregateKey, {
+            part_num: row.part_num,
+            part_name: row.part_name || row.part_num,
+            color_name: row.color_name,
+            quantity: row.missing_quantity,
+          });
+        }
+      }
+
+      const missingRows = Array.from(aggregate.values()).filter((row) => row.quantity > 0);
+      const { data: existingList } = await supabase
+        .from("lists")
+        .select("list_id")
+        .eq("owner_id", userId)
+        .eq("list_type", "deseos")
+        .eq("name", AUTO_MINIFIG_MISSING_LIST_NAME)
+        .maybeSingle();
+
+      if (missingRows.length === 0) {
+        if (existingList?.list_id) {
+          await supabase.from("lists").delete().eq("list_id", String(existingList.list_id)).eq("owner_id", userId);
+          await loadListasFromDb();
+        }
+        setMinifigMissingWishlistSyncing(false);
+        return;
+      }
+
+      let listId = String(existingList?.list_id ?? "").trim();
+      if (!listId) {
+        const { data: createdList, error: createListError } = await supabase
+          .from("lists")
+          .insert({
+            owner_id: userId,
+            lug_id: currentLugId,
+            name: AUTO_MINIFIG_MISSING_LIST_NAME,
+            list_type: "deseos",
+            is_public: false,
+          })
+          .select("list_id")
+          .single();
+
+        if (createListError || !createdList?.list_id) {
+          setStatus(`${t.errorPrefix}: ${createListError?.message || "No se pudo crear la lista"}`);
+          setMinifigMissingWishlistSyncing(false);
+          return;
+        }
+
+        listId = String(createdList.list_id);
+      }
+
+      await supabase.from("list_items").delete().eq("list_id", listId);
+
+      const payloadItems = missingRows.map((row) => ({
+        list_id: listId,
+        part_num: row.part_num,
+        part_name: row.part_name,
+        color_name: row.color_name ? `BrickLink: ${row.color_name}` : null,
+        imgmatchcolor: true,
+        quantity: row.quantity,
+      }));
+
+      const { error: insertError } = await supabase.from("list_items").insert(payloadItems);
+      if (insertError) {
+        setStatus(`${t.errorPrefix}: ${insertError.message}`);
+        setMinifigMissingWishlistSyncing(false);
+        return;
+      }
+
+      await loadListasFromDb();
+    } catch (error) {
+      setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
+    }
+
+    setMinifigMissingWishlistSyncing(false);
+  }, [currentLugId, loadListasFromDb, loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
 
   const openMinifigurasSection = useCallback(async (options?: { navigate?: boolean }) => {
     if (options?.navigate !== false) {
@@ -4888,6 +5144,57 @@ th{background:#f3f4f6}
       window.clearTimeout(handle);
     };
   }, [activeSection, loadMinifigSearchResults, minifigSearchQuery]);
+
+  useEffect(() => {
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    if (!supabase || !userId || minifigContextMissingSetNums.length === 0) {
+      setMinifigContextMissingPiecesCount(0);
+      return;
+    }
+
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        const analysis = await loadMinifigMissingAnalysisBySetNums(minifigContextMissingSetNums);
+        if (cancelled || analysis.hadError) {
+          return;
+        }
+        setMinifigContextMissingPiecesCount(analysis.missingPieceCount);
+      })();
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [activeSection, loadMinifigMissingAnalysisBySetNums, minifigContextMissingSetNums, supabase, userId]);
+
+  useEffect(() => {
+    if (!userId || !supabase) {
+      return;
+    }
+
+    if (activeSection !== "minifiguras") {
+      return;
+    }
+
+    if (minifigSeriesRows.length === 0) {
+      return;
+    }
+
+    const debounceHandle = window.setTimeout(() => {
+      if (!minifigMissingWishlistSyncing) {
+        void syncAutoMinifigMissingWishlist(minifigContextMissingSetNums);
+      }
+    }, 500);
+
+    return () => {
+      window.clearTimeout(debounceHandle);
+    };
+  }, [activeSection, minifigContextMissingSetNums, minifigMissingWishlistSyncing, minifigSeriesRows.length, minifigSetHasMissingPartsBySetNum, supabase, syncAutoMinifigMissingWishlist, userId]);
 
   useEffect(() => {
     setListItemsPage(1);
@@ -7644,7 +7951,8 @@ th{background:#f3f4f6}
                     <h2 className="font-boogaloo text-3xl font-normal text-slate-900">{labels.minifigSectionTitle}</h2>
                     <div className="text-sm font-normal leading-5 text-slate-700">
                       <p>{`Completas: ${minifigGlobalOwnedStats.complete}`}</p>
-                      <p>{`Con Faltantes: ${minifigGlobalOwnedStats.missing}`}</p>
+                      <p>{`Con Faltantes: ${minifigContextMissingFiguresCount}`}</p>
+                      <p>{`Piezas faltantes: ${minifigContextMissingPiecesCount}`}</p>
                       <p>{`Tengo en Total: ${minifigGlobalOwnedStats.total}`}</p>
                       <p>{`Favoritas: ${minifigGlobalOwnedStats.favorites}`}</p>
                     </div>
@@ -8408,13 +8716,15 @@ th{background:#f3f4f6}
                                 {labels.public}
                               </button>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => openDeleteListaConfirm(item)}
-                              className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
-                            >
-                              {labels.deleteList}
-                            </button>
+                            {item.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
+                              <button
+                                type="button"
+                                onClick={() => openDeleteListaConfirm(item)}
+                                className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
+                              >
+                                {labels.deleteList}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       ))
@@ -8477,13 +8787,15 @@ th{background:#f3f4f6}
                                 {labels.public}
                               </button>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => openDeleteListaConfirm(item)}
-                              className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
-                            >
-                              {labels.deleteList}
-                            </button>
+                            {item.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
+                              <button
+                                type="button"
+                                onClick={() => openDeleteListaConfirm(item)}
+                                className="rounded-md border border-red-300 px-2 py-1 text-[11px] font-semibold text-red-700"
+                              >
+                                {labels.deleteList}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       ))
