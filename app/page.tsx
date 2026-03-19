@@ -30,6 +30,24 @@ type LugMemberItem = {
   rol_lug: string | null;
 };
 
+type MemberChatMessageItem = {
+  message_id: string;
+  room_id: string;
+  sender_id: string | null;
+  content: string;
+  created_at: string;
+  edited_at: string | null;
+};
+
+type UnreadChatRoomAlertItem = {
+  room_id: string;
+  room_type: string;
+  room_name: string | null;
+  unread_count: number;
+  last_message_content: string | null;
+  last_message_at: string | null;
+};
+
 type LugInfoItem = {
   lug_id: string;
   nombre: string;
@@ -459,6 +477,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [selectedAdminRequest, setSelectedAdminRequest] = useState<AdminJoinRequestItem | null>(null);
   const [adminDecisionLoading, setAdminDecisionLoading] = useState(false);
   const [promoteMemberLoadingId, setPromoteMemberLoadingId] = useState<string | null>(null);
+  const [memberChatLoadingId, setMemberChatLoadingId] = useState<string | null>(null);
+  const [showMemberChatPopup, setShowMemberChatPopup] = useState(false);
+  const [selectedMemberChat, setSelectedMemberChat] = useState<{ roomId: string; memberId: string; memberName: string } | null>(null);
+  const [memberChatMessages, setMemberChatMessages] = useState<MemberChatMessageItem[]>([]);
+  const [memberChatLoading, setMemberChatLoading] = useState(false);
+  const [memberChatInput, setMemberChatInput] = useState("");
+  const [memberChatSending, setMemberChatSending] = useState(false);
+  const [unreadChatsCount, setUnreadChatsCount] = useState(0);
+  const [showUnreadChatsPopup, setShowUnreadChatsPopup] = useState(false);
+  const [unreadChatsPopupLoading, setUnreadChatsPopupLoading] = useState(false);
+  const [unreadChatsRooms, setUnreadChatsRooms] = useState<UnreadChatRoomAlertItem[]>([]);
   const [masterEmptyNotificationsCount, setMasterEmptyNotificationsCount] = useState(0);
   const [showMasterEmptyLugsPanel, setShowMasterEmptyLugsPanel] = useState(false);
   const [masterEmptyLugsLoading, setMasterEmptyLugsLoading] = useState(false);
@@ -586,6 +615,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [offersPanelsLoading, setOffersPanelsLoading] = useState(false);
   const colorDropdownRef = useRef<HTMLDivElement | null>(null);
   const partSearchDropdownRef = useRef<HTMLDivElement | null>(null);
+  const memberChatScrollRef = useRef<HTMLDivElement | null>(null);
 
   const t = useMemo(() => uiTranslations[language], [language]);
   const labels = useMemo(() => {
@@ -2716,6 +2746,66 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const complete = Math.max(0, total - missingOwnedSetCount);
     setMinifigGlobalOwnedStats({ complete, missing, total, favorites });
   }, [loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
+
+  const loadUnreadChatsCount = useCallback(async () => {
+    if (!supabase || !userId) {
+      setUnreadChatsCount(0);
+      return;
+    }
+
+    const { data, error } = await supabase.rpc("chat_list_rooms_current", { p_limit: 300 });
+    if (error) {
+      setUnreadChatsCount(0);
+      return;
+    }
+
+    const totalUnread = ((data ?? []) as Array<Record<string, unknown>>).reduce((acc, row) => {
+      const value = Math.max(0, Number(row.unread_count ?? 0) || 0);
+      return acc + value;
+    }, 0);
+
+    setUnreadChatsCount(totalUnread);
+  }, [supabase, userId]);
+
+  const openUnreadChatsPanel = useCallback(async () => {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    setShowUnreadChatsPopup(true);
+    setUnreadChatsPopupLoading(true);
+
+    const { data, error } = await supabase.rpc("chat_list_rooms_current", { p_limit: 300 });
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setUnreadChatsRooms([]);
+      setUnreadChatsPopupLoading(false);
+      return;
+    }
+
+    const rows: UnreadChatRoomAlertItem[] = ((data ?? []) as Array<Record<string, unknown>>)
+      .map((row) => ({
+        room_id: String(row.room_id ?? "").trim(),
+        room_type: String(row.room_type ?? "group").trim(),
+        room_name: (() => {
+          const value = String(row.room_name ?? "").trim();
+          return value || null;
+        })(),
+        unread_count: Math.max(0, Number(row.unread_count ?? 0) || 0),
+        last_message_content: (() => {
+          const value = String(row.last_message_content ?? "");
+          return value || null;
+        })(),
+        last_message_at: (() => {
+          const value = String(row.last_message_at ?? "").trim();
+          return value || null;
+        })(),
+      }))
+      .filter((row) => row.room_id);
+
+    setUnreadChatsRooms(rows);
+    setUnreadChatsPopupLoading(false);
+  }, [supabase, t.errorPrefix, userId]);
 
   const saveMinifigUiPreferences = useCallback(
     async (patch: { show_only_favorite_series?: boolean; show_only_favorite_figures?: boolean }) => {
@@ -5220,6 +5310,168 @@ th{background:#f3f4f6}
   }, [activeSection, minifigContextMissingSetNums, minifigMissingWishlistSyncing, minifigSeriesRows.length, minifigSetHasMissingPartsBySetNum, supabase, syncAutoMinifigMissingWishlist, userId]);
 
   useEffect(() => {
+    if (!supabase || !showMemberChatPopup || !selectedMemberChat?.roomId) {
+      return;
+    }
+
+    const roomId = selectedMemberChat.roomId;
+    const channel = supabase
+      .channel(`member-chat-popup-${roomId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` }, (payload) => {
+        const row = payload.new as Record<string, unknown>;
+        const nextMessage: MemberChatMessageItem = {
+          message_id: String(row.message_id ?? "").trim(),
+          room_id: String(row.room_id ?? "").trim(),
+          sender_id: (() => {
+            const value = String(row.sender_id ?? "").trim();
+            return value || null;
+          })(),
+          content: String(row.content ?? ""),
+          created_at: String(row.created_at ?? "").trim(),
+          edited_at: (() => {
+            const value = String(row.edited_at ?? "").trim();
+            return value || null;
+          })(),
+        };
+
+        if (!nextMessage.message_id) {
+          return;
+        }
+
+        setMemberChatMessages((prev) => {
+          if (prev.some((message) => message.message_id === nextMessage.message_id)) {
+            return prev;
+          }
+          return [...prev, nextMessage];
+        });
+
+        if (nextMessage.sender_id && nextMessage.sender_id !== userId) {
+          void supabase.rpc("chat_mark_room_read", {
+            p_room_id: roomId,
+            p_last_message_id: nextMessage.message_id,
+          });
+          void loadUnreadChatsCount();
+        }
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` }, (payload) => {
+        const row = payload.new as Record<string, unknown>;
+        const messageId = String(row.message_id ?? "").trim();
+        if (!messageId) {
+          return;
+        }
+
+        setMemberChatMessages((prev) =>
+          prev.map((message) =>
+            message.message_id === messageId
+              ? {
+                  ...message,
+                  content: String(row.content ?? message.content),
+                  edited_at: (() => {
+                    const value = String(row.edited_at ?? "").trim();
+                    return value || null;
+                  })(),
+                }
+              : message,
+          ),
+        );
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadUnreadChatsCount, selectedMemberChat?.roomId, showMemberChatPopup, supabase, userId]);
+
+  useEffect(() => {
+    if (!supabase || !userId) {
+      setUnreadChatsCount(0);
+      return;
+    }
+
+    void loadUnreadChatsCount();
+    const handle = window.setInterval(() => {
+      void loadUnreadChatsCount();
+    }, 6000);
+
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [loadUnreadChatsCount, supabase, userId]);
+
+  useEffect(() => {
+    if (!showMemberChatPopup) {
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      const container = memberChatScrollRef.current;
+      if (!container) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+    }, 0);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [memberChatLoading, memberChatMessages.length, showMemberChatPopup]);
+
+  useEffect(() => {
+    if (!supabase || !showMemberChatPopup || !selectedMemberChat?.roomId) {
+      return;
+    }
+
+    const roomId = selectedMemberChat.roomId;
+    const refreshMessages = async () => {
+      const { data, error } = await supabase
+        .from("chat_messages")
+        .select("message_id, room_id, sender_id, content, created_at, edited_at")
+        .eq("room_id", roomId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: true })
+        .limit(120);
+
+      if (error) {
+        return;
+      }
+
+      const refreshed: MemberChatMessageItem[] = ((data ?? []) as Array<Record<string, unknown>>)
+        .map((row) => ({
+          message_id: String(row.message_id ?? "").trim(),
+          room_id: String(row.room_id ?? "").trim(),
+          sender_id: (() => {
+            const value = String(row.sender_id ?? "").trim();
+            return value || null;
+          })(),
+          content: String(row.content ?? ""),
+          created_at: String(row.created_at ?? "").trim(),
+          edited_at: (() => {
+            const value = String(row.edited_at ?? "").trim();
+            return value || null;
+          })(),
+        }))
+        .filter((row) => row.message_id);
+
+      setMemberChatMessages((prev) => {
+        const prevLast = prev[prev.length - 1]?.message_id ?? "";
+        const nextLast = refreshed[refreshed.length - 1]?.message_id ?? "";
+        if (prev.length === refreshed.length && prevLast === nextLast) {
+          return prev;
+        }
+        return refreshed;
+      });
+    };
+
+    const handle = window.setInterval(() => {
+      void refreshMessages();
+    }, 3500);
+
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [selectedMemberChat?.roomId, showMemberChatPopup, supabase]);
+
+  useEffect(() => {
     setListItemsPage(1);
   }, [selectedListForItems?.id]);
 
@@ -6102,6 +6354,179 @@ th{background:#f3f4f6}
     setPromoteMemberLoadingId(null);
   }
 
+  async function openMiLugMemberChat(memberId: string, memberName: string) {
+    if (!supabase || !userId) {
+      return;
+    }
+
+    if (!memberId || memberId === userId) {
+      setStatus("No se puede crear un chat grupal con tu propio usuario.");
+      return;
+    }
+
+    setMemberChatLoadingId(memberId);
+
+    let roomId = "";
+    const { data: roomsData, error: roomsError } = await supabase.rpc("chat_list_rooms_current", { p_limit: 500 });
+    if (!roomsError) {
+      const maybeRoom = ((roomsData ?? []) as Array<Record<string, unknown>>).find((row) => {
+        const roomType = String(row.room_type ?? "").trim();
+        if (roomType !== "group") {
+          return false;
+        }
+        const participants = Array.isArray((row as { participant_ids?: unknown }).participant_ids)
+          ? ((row as { participant_ids?: unknown[] }).participant_ids ?? []).map((value) => String(value ?? "").trim()).filter(Boolean)
+          : [];
+        if (participants.length !== 2) {
+          return false;
+        }
+        return participants.includes(userId) && participants.includes(memberId);
+      });
+
+      roomId = String((maybeRoom as { room_id?: unknown } | undefined)?.room_id ?? "").trim();
+    }
+
+    if (!roomId) {
+      const roomName = `Chat ${displayName || "Usuario"} + ${memberName || "Usuario"}`;
+      const { data, error } = await supabase.rpc("chat_create_group_room", {
+        p_name: roomName,
+        p_member_ids: [memberId],
+      });
+
+      if (error) {
+        setStatus(`${t.errorPrefix}: ${error.message}`);
+        setMemberChatLoadingId(null);
+        return;
+      }
+
+      roomId = String(data ?? "").trim();
+    }
+
+    if (!roomId) {
+      setStatus("No se pudo abrir el chat.");
+      setMemberChatLoadingId(null);
+      return;
+    }
+
+    await openChatPopupByRoomId(roomId, memberName || "Usuario");
+    setMemberChatLoadingId(null);
+  }
+
+  async function openChatPopupByRoomId(roomId: string, roomLabel: string) {
+    if (!supabase || !roomId) {
+      return;
+    }
+
+    setSelectedMemberChat({ roomId, memberId: "", memberName: roomLabel || "Chat" });
+    setShowMemberChatPopup(true);
+    setShowMiLugMembersPanel(false);
+    setShowUnreadChatsPopup(false);
+    setMemberChatMessages([]);
+    setMemberChatLoading(true);
+
+    const { data: messageRows, error: messagesError } = await supabase
+      .from("chat_messages")
+      .select("message_id, room_id, sender_id, content, created_at, edited_at")
+      .eq("room_id", roomId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: true })
+      .limit(120);
+
+    if (messagesError) {
+      setStatus(`${t.errorPrefix}: ${messagesError.message}`);
+      setMemberChatLoading(false);
+      return;
+    }
+
+    const parsedMessages: MemberChatMessageItem[] = ((messageRows ?? []) as Array<Record<string, unknown>>)
+      .map((row) => ({
+        message_id: String(row.message_id ?? "").trim(),
+        room_id: String(row.room_id ?? "").trim(),
+        sender_id: (() => {
+          const value = String(row.sender_id ?? "").trim();
+          return value || null;
+        })(),
+        content: String(row.content ?? ""),
+        created_at: String(row.created_at ?? "").trim(),
+        edited_at: (() => {
+          const value = String(row.edited_at ?? "").trim();
+          return value || null;
+        })(),
+      }))
+      .filter((row) => row.message_id);
+
+    setMemberChatMessages(parsedMessages);
+
+    const latestMessageId = parsedMessages[parsedMessages.length - 1]?.message_id ?? null;
+    if (latestMessageId) {
+      await supabase.rpc("chat_mark_room_read", {
+        p_room_id: roomId,
+        p_last_message_id: latestMessageId,
+      });
+      void loadUnreadChatsCount();
+    }
+
+    setMemberChatLoading(false);
+  }
+
+  async function sendMessageInMemberChat() {
+    if (!supabase || !userId || !selectedMemberChat || memberChatSending) {
+      return;
+    }
+
+    const content = memberChatInput.trim();
+    if (!content) {
+      return;
+    }
+
+    setMemberChatSending(true);
+
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .insert({
+        room_id: selectedMemberChat.roomId,
+        sender_id: userId,
+        message_type: "text",
+        content,
+      })
+      .select("message_id, room_id, sender_id, content, created_at, edited_at")
+      .single();
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMemberChatSending(false);
+      return;
+    }
+
+    if (data) {
+      const sentMessage: MemberChatMessageItem = {
+        message_id: String((data as { message_id?: unknown }).message_id ?? "").trim(),
+        room_id: String((data as { room_id?: unknown }).room_id ?? "").trim(),
+        sender_id: (() => {
+          const value = String((data as { sender_id?: unknown }).sender_id ?? "").trim();
+          return value || null;
+        })(),
+        content: String((data as { content?: unknown }).content ?? content),
+        created_at: String((data as { created_at?: unknown }).created_at ?? "").trim(),
+        edited_at: (() => {
+          const value = String((data as { edited_at?: unknown }).edited_at ?? "").trim();
+          return value || null;
+        })(),
+      };
+      if (sentMessage.message_id) {
+        setMemberChatMessages((prev) => {
+          if (prev.some((message) => message.message_id === sentMessage.message_id)) {
+            return prev;
+          }
+          return [...prev, sentMessage];
+        });
+      }
+    }
+
+    setMemberChatInput("");
+    setMemberChatSending(false);
+  }
+
   async function resolveMasterEmptyLug(notificationId: string, actionValue: "delete" | "open") {
     if (!supabase) {
       return;
@@ -6596,10 +7021,180 @@ th{background:#f3f4f6}
     );
   }
 
+  const unreadChatsFloatingAlert = unreadChatsCount > 0 ? (
+    <button
+      type="button"
+      onClick={() => void openUnreadChatsPanel()}
+      className="absolute right-2 top-2 z-[80] rounded-lg border border-slate-300 bg-white/95 p-1.5 shadow"
+      title={`Tenes ${unreadChatsCount} mensajes sin leer`}
+    >
+      <div className="relative">
+        <Image
+          src="/api/avatar/Mensaje_1x1.svg"
+          alt="Mensajes sin leer"
+          width={28}
+          height={28}
+          unoptimized
+          className="h-[28px] w-[28px] object-contain"
+        />
+        <span className="absolute -right-1 -top-1 inline-flex min-h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+          {unreadChatsCount > 99 ? "99+" : unreadChatsCount}
+        </span>
+      </div>
+    </button>
+  ) : null;
+
+  const unreadChatsPopupOverlay = showUnreadChatsPopup ? (
+    <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setShowUnreadChatsPopup(false)}>
+      <div className="w-full max-w-[460px] rounded-xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-boogaloo text-2xl text-slate-900">Chats</h3>
+          <button
+            type="button"
+            onClick={() => setShowUnreadChatsPopup(false)}
+            className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+          >
+            {labels.close}
+          </button>
+        </div>
+
+        <div className="mt-3 max-h-[360px] space-y-2 overflow-auto">
+          {unreadChatsPopupLoading ? (
+            <p className="text-sm text-slate-600">{labels.loading}</p>
+          ) : unreadChatsRooms.length === 0 ? (
+            <p className="text-sm text-slate-500">No hay conversaciones.</p>
+          ) : (
+            unreadChatsRooms.map((room) => {
+              const hasUnread = room.unread_count > 0;
+              const title = room.room_name || (room.room_type === "direct" ? "Chat directo" : "Grupo");
+              const preview = room.last_message_content || "Sin mensajes";
+              return (
+                <button
+                  key={room.room_id}
+                  type="button"
+                  onClick={() => void openChatPopupByRoomId(room.room_id, title)}
+                  className={`w-full rounded-md border px-3 py-2 text-left ${
+                    hasUnread ? "border-sky-500 bg-sky-50" : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="truncate text-sm font-semibold text-slate-900">{title}</p>
+                    {hasUnread ? (
+                      <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                        {room.unread_count > 99 ? "99+" : room.unread_count}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 truncate text-xs text-slate-600">{preview}</p>
+                  {room.last_message_at ? (
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {new Date(room.last_message_at).toLocaleString("es-AR", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  ) : null}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const memberChatPopupOverlay = showMemberChatPopup && selectedMemberChat ? (
+    <div
+      className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/55 p-4"
+      onClick={() => {
+        setShowMemberChatPopup(false);
+        setSelectedMemberChat(null);
+        setMemberChatMessages([]);
+        setMemberChatInput("");
+      }}
+    >
+      <div className="w-full max-w-[760px] rounded-xl bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div>
+            <p className="font-boogaloo text-2xl text-slate-900">Chat</p>
+            <p className="text-xs text-slate-600">{selectedMemberChat.memberName}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowMemberChatPopup(false);
+              setSelectedMemberChat(null);
+              setMemberChatMessages([]);
+              setMemberChatInput("");
+            }}
+            className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+          >
+            Cerrar
+          </button>
+        </header>
+
+        <div ref={memberChatScrollRef} className="max-h-[430px] min-h-[300px] overflow-y-auto bg-slate-50 px-4 py-3">
+          {memberChatLoading ? <p className="text-sm text-slate-500">{labels.loading}</p> : null}
+          {!memberChatLoading && memberChatMessages.length === 0 ? <p className="text-sm text-slate-500">Sin mensajes todavia.</p> : null}
+          <div className="space-y-2">
+            {memberChatMessages.map((message) => {
+              const isMine = message.sender_id === userId;
+              return (
+                <div key={message.message_id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[85%] rounded-lg border px-3 py-2 ${isMine ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-900"}`}>
+                    <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
+                    <p className={`mt-1 text-[10px] ${isMine ? "text-white/70" : "text-slate-400"}`}>
+                      {new Date(message.created_at).toLocaleString("es-AR", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <footer className="border-t border-slate-200 p-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={memberChatInput}
+              onChange={(event) => setMemberChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendMessageInMemberChat();
+                }
+              }}
+              placeholder="Escribe un mensaje..."
+              className="max-h-24 min-h-[40px] flex-1 resize-y rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900"
+            />
+            <button
+              type="button"
+              onClick={() => void sendMessageInMemberChat()}
+              disabled={memberChatSending || !memberChatInput.trim()}
+              className="rounded-md border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Enviar
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  ) : null;
+
   if (userEmail) {
     if (activeSection === "lista_detalle" && !selectedListForItems) {
       return (
         <main className="bg-lego-tile min-h-screen">
+          {unreadChatsFloatingAlert}
+          {unreadChatsPopupOverlay}
+          {memberChatPopupOverlay}
           <div className="flex min-h-screen flex-col items-center justify-center">
             <p className="font-cubano-title text-3xl font-semibold text-white">{labels.loadingList}</p>
             <div className="mt-6 w-full px-4 text-center">
@@ -6620,7 +7215,10 @@ th{background:#f3f4f6}
 
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto w-full max-w-[900px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative mx-auto w-full max-w-[900px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -7395,7 +7993,10 @@ th{background:#f3f4f6}
     if (activeSection === "mi_lug") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -7706,6 +8307,21 @@ th{background:#f3f4f6}
                                           Admin
                                         </span>
                                       ) : null}
+                                      {rolLug === "admin" && member.rol_lug !== "admin" && member.id !== userId ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => void promoteMiLugMemberToAdmin(member.id, member.full_name)}
+                                          disabled={promoteMemberLoadingId === member.id}
+                                          className="rounded-md border px-2 py-0.5 text-[10px] font-semibold"
+                                          style={{
+                                            backgroundColor: currentLugColor2 || "#ffffff",
+                                            color: getContrastTextColor(currentLugColor2 || "#ffffff"),
+                                            borderColor: currentLugColor3 || "#111111",
+                                          }}
+                                        >
+                                          {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
+                                        </button>
+                                      ) : null}
                                     </div>
                                     <div className="mt-1 flex items-center gap-2">
                                       <span
@@ -7725,21 +8341,24 @@ th{background:#f3f4f6}
                                     </div>
                                   </div>
                                 </div>
-                                {rolLug === "admin" && member.rol_lug !== "admin" && member.id !== userId ? (
+                                <div className="flex shrink-0 flex-col items-end gap-2">
                                   <button
                                     type="button"
-                                    onClick={() => void promoteMiLugMemberToAdmin(member.id, member.full_name)}
-                                    disabled={promoteMemberLoadingId === member.id}
-                                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
-                                    style={{
-                                      backgroundColor: currentLugColor2 || "#ffffff",
-                                      color: getContrastTextColor(currentLugColor2 || "#ffffff"),
-                                      borderColor: currentLugColor3 || "#111111",
-                                    }}
+                                    onClick={() => void openMiLugMemberChat(member.id, member.full_name)}
+                                    disabled={memberChatLoadingId === member.id}
+                                    className="rounded-md border border-slate-300 bg-white p-1 disabled:cursor-not-allowed disabled:opacity-60"
+                                    title="Abrir chat"
                                   >
-                                    {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
+                                    <Image
+                                      src="/api/avatar/Mensaje_A.svg"
+                                      alt="Mensaje"
+                                      width={22}
+                                      height={22}
+                                      unoptimized
+                                      className="h-[22px] w-[22px] object-contain"
+                                    />
                                   </button>
-                                ) : null}
+                                </div>
                               </div>
                             </div>
                           );
@@ -7749,6 +8368,8 @@ th{background:#f3f4f6}
                   </div>
                 </div>
               ) : null}
+
+              {memberChatPopupOverlay}
 
               {showOffersGivenPanel ? (
                 <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowOffersGivenPanel(false)}>
@@ -7968,7 +8589,10 @@ th{background:#f3f4f6}
     if (activeSection === "minifiguras") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto w-full max-w-[980px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative mx-auto w-full max-w-[980px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -8639,7 +9263,10 @@ th{background:#f3f4f6}
     if (activeSection === "listas") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -9065,7 +9692,10 @@ th{background:#f3f4f6}
     if (activeSection === "configuracion_personal") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -9290,7 +9920,10 @@ th{background:#f3f4f6}
             </button>
           ) : null}
 
-          <div className="rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          <div className="relative rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+          {unreadChatsFloatingAlert}
+          {unreadChatsPopupOverlay}
+          {memberChatPopupOverlay}
           <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
           <header className="pb-5">
             <div className="flex items-start justify-between gap-3">
@@ -10472,21 +11105,39 @@ th{background:#f3f4f6}
                                     </p>
                                   </div>
                                 </div>
-                                {rolLug === "admin" && currentLugId === lugInfoData.lug_id && member.rol_lug !== "admin" ? (
+                                <div className="flex shrink-0 flex-col items-end gap-2">
                                   <button
                                     type="button"
-                                    onClick={() => void promoteMemberToAdmin(member.id, member.full_name)}
-                                    disabled={promoteMemberLoadingId === member.id}
-                                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
-                                    style={{
-                                      backgroundColor: currentLugColor2 || "#ffffff",
-                                      color: getContrastTextColor(currentLugColor2 || "#ffffff"),
-                                      borderColor: currentLugColor3 || "#111111",
-                                    }}
+                                    onClick={() => void openMiLugMemberChat(member.id, member.full_name)}
+                                    disabled={memberChatLoadingId === member.id || member.id === userId}
+                                    className="rounded-md border border-slate-300 bg-white p-1 disabled:cursor-not-allowed disabled:opacity-60"
+                                    title="Abrir chat"
                                   >
-                                    {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
+                                    <Image
+                                      src="/api/avatar/Mensaje_A.svg"
+                                      alt="Mensaje"
+                                      width={22}
+                                      height={22}
+                                      unoptimized
+                                      className="h-[22px] w-[22px] object-contain"
+                                    />
                                   </button>
-                                ) : null}
+                                  {rolLug === "admin" && currentLugId === lugInfoData.lug_id && member.rol_lug !== "admin" ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void promoteMemberToAdmin(member.id, member.full_name)}
+                                      disabled={promoteMemberLoadingId === member.id}
+                                      className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                      style={{
+                                        backgroundColor: currentLugColor2 || "#ffffff",
+                                        color: getContrastTextColor(currentLugColor2 || "#ffffff"),
+                                        borderColor: currentLugColor3 || "#111111",
+                                      }}
+                                    >
+                                      {promoteMemberLoadingId === member.id ? t.processing : labels.makeAdmin}
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
                             </li>
                           ))}
