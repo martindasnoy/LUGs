@@ -473,6 +473,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [minifigSeriesCheckedById, setMinifigSeriesCheckedById] = useState<Record<number, boolean>>({});
   const [minifigSeriesFavoriteById, setMinifigSeriesFavoriteById] = useState<Record<number, boolean>>({});
   const [showOnlyFavoriteSeries, setShowOnlyFavoriteSeries] = useState(false);
+  const [minifigSeriesProgressById, setMinifigSeriesProgressById] = useState<Record<number, { owned: number; total: number }>>({});
   const [showMinifigSeriesPopup, setShowMinifigSeriesPopup] = useState(false);
   const [minifigFiguresBySeriesId, setMinifigFiguresBySeriesId] = useState<Record<number, MinifigFigureItem[]>>({});
   const [minifigFiguresLoadingBySeriesId, setMinifigFiguresLoadingBySeriesId] = useState<Record<number, boolean>>({});
@@ -2259,6 +2260,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
   const loadCollectibleSeries = useCallback(async () => {
     setMinifigSeriesLoading(true);
+    setMinifigSeriesProgressById({});
 
     try {
       const authHeaders = await getSupabaseAuthHeaders();
@@ -2288,14 +2290,26 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           : [];
 
       setMinifigSeriesRows(rows);
+      setMinifigSeriesProgressById(
+        rows.reduce<Record<number, { owned: number; total: number }>>((acc, row) => {
+          acc[row.id] = { owned: 0, total: Math.max(0, Number(row.set_count ?? 0) || 0) };
+          return acc;
+        }, {}),
+      );
 
       if (supabase && userId && rows.length > 0) {
         const themeIds = Array.from(new Set(rows.map((row) => row.id)));
-        const { data: prefRows, error: prefError } = await supabase
-          .from("minifig_user_series_preferences")
-          .select("theme_id, is_selected, is_favorite")
-          .eq("user_id", userId)
-          .in("theme_id", themeIds);
+        const [{ data: prefRows, error: prefError }, { data: setsRows, error: setsError }] = await Promise.all([
+          supabase
+            .from("minifig_user_series_preferences")
+            .select("theme_id, is_selected, is_favorite")
+            .eq("user_id", userId)
+            .in("theme_id", themeIds),
+          supabase
+            .from("minifigure_sets_catalog")
+            .select("set_num, theme_id, name, num_parts")
+            .in("theme_id", themeIds),
+        ]);
 
         if (!prefError) {
           const checkedMap: Record<number, boolean> = {};
@@ -2308,6 +2322,78 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           }
           setMinifigSeriesCheckedById((prev) => ({ ...prev, ...checkedMap }));
           setMinifigSeriesFavoriteById((prev) => ({ ...prev, ...favoriteMap }));
+        }
+
+        if (!setsError) {
+          const setsByThemeId = new Map<number, Set<string>>();
+          const allSetNums = new Set<string>();
+          for (const row of setsRows ?? []) {
+            const themeId = Number((row as { theme_id?: unknown }).theme_id ?? 0);
+            const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
+            const setName = String((row as { name?: unknown }).name ?? "").toLowerCase();
+            const setNumParts = Math.max(0, Number((row as { num_parts?: unknown }).num_parts ?? 0) || 0);
+            const hasPackagingKeywords = /\b(?:box|pack)\b/.test(setName);
+            if (!themeId || !setNum) continue;
+            if (
+              setName.includes("complete") ||
+              setName.includes("random bag") ||
+              setName.includes("sealed box") ||
+              setName.includes("random box") ||
+              hasPackagingKeywords ||
+              setNumParts <= 0
+            ) {
+              continue;
+            }
+            if (!setsByThemeId.has(themeId)) {
+              setsByThemeId.set(themeId, new Set<string>());
+            }
+            setsByThemeId.get(themeId)?.add(setNum);
+            allSetNums.add(setNum);
+          }
+
+          const setNums = Array.from(allSetNums);
+          const [inventoryResult, partInventoryResult] = await Promise.all([
+            setNums.length > 0
+              ? supabase.from("minifig_user_inventory").select("set_num, is_owned").eq("user_id", userId).in("set_num", setNums)
+              : Promise.resolve({ data: [], error: null }),
+            setNums.length > 0
+              ? supabase.from("minifig_user_part_inventory").select("set_num, owned_quantity").eq("user_id", userId).in("set_num", setNums)
+              : Promise.resolve({ data: [], error: null }),
+          ]);
+
+          const ownedBySetNum = new Map<string, boolean>();
+          for (const row of inventoryResult.data ?? []) {
+            const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
+            if (!setNum) continue;
+            ownedBySetNum.set(setNum, Boolean((row as { is_owned?: unknown }).is_owned));
+          }
+
+          const missingBySetNum = new Map<string, boolean>();
+          for (const row of partInventoryResult.data ?? []) {
+            const setNum = String((row as { set_num?: unknown }).set_num ?? "").trim();
+            if (!setNum) continue;
+            const ownedQty = Math.max(0, Number((row as { owned_quantity?: unknown }).owned_quantity ?? 0) || 0);
+            if (ownedQty <= 0) {
+              missingBySetNum.set(setNum, true);
+            } else if (!missingBySetNum.has(setNum)) {
+              missingBySetNum.set(setNum, false);
+            }
+          }
+
+          const progressByThemeId: Record<number, { owned: number; total: number }> = {};
+          for (const series of rows) {
+            const setNumsForSeries = Array.from(setsByThemeId.get(series.id) ?? new Set<string>());
+            const owned = setNumsForSeries.reduce((acc, setNum) => {
+              const isOwned = Boolean(ownedBySetNum.get(setNum));
+              const hasMissing = Boolean(missingBySetNum.get(setNum));
+              return isOwned || hasMissing ? acc + 1 : acc;
+            }, 0);
+            progressByThemeId[series.id] = {
+              owned,
+              total: setNumsForSeries.length,
+            };
+          }
+          setMinifigSeriesProgressById(progressByThemeId);
         }
       }
 
@@ -2322,6 +2408,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const checkedMinifigSeriesIds = useMemo(
     () => Object.entries(minifigSeriesCheckedById).filter(([, checked]) => checked).map(([id]) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
     [minifigSeriesCheckedById],
+  );
+  const popupVisibleSeriesRows = useMemo(
+    () => (showOnlyFavoriteSeries ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id])) : minifigSeriesRows),
+    [minifigSeriesFavoriteById, minifigSeriesRows, showOnlyFavoriteSeries],
   );
 
   const loadMinifigSearchResults = useCallback(
@@ -4066,6 +4156,56 @@ th{background:#f3f4f6}
     await loadMiLugPools();
     setMiLugPoolsLoading(false);
     setSelectedMiLugPoolItem(null);
+  }
+
+  async function clearWishlistOfferFromPool() {
+    if (!supabase || !userId || !selectedMiLugPoolItem) {
+      return;
+    }
+    if (selectedMiLugPoolItem.type !== "wishlist") {
+      return;
+    }
+
+    setMiLugPoolsLoading(true);
+    const { error } = await supabase
+      .from("wishlist_item_offers")
+      .delete()
+      .eq("list_item_id", selectedMiLugPoolItem.item.id)
+      .eq("requester_id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setMiLugPoolsLoading(false);
+      return;
+    }
+
+    setStatus("Oferta liberada.");
+    await loadMiLugPools();
+    setMiLugPoolsLoading(false);
+    setSelectedMiLugPoolItem(null);
+  }
+
+  async function releaseOfferFromGivenPanel(offerId: string) {
+    if (!supabase || !userId || !offerId) {
+      return;
+    }
+
+    setOffersPanelsLoading(true);
+    const { error } = await supabase
+      .from("wishlist_item_offers")
+      .delete()
+      .eq("offer_id", offerId)
+      .eq("requester_id", userId);
+
+    if (error) {
+      setStatus(`${t.errorPrefix}: ${error.message}`);
+      setOffersPanelsLoading(false);
+      return;
+    }
+
+    await Promise.all([loadOffersGivenSummary(), loadOffersReceivedSummary(), loadMiLugPools()]);
+    setOffersPanelsLoading(false);
+    setStatus("Oferta liberada.");
   }
 
   function selectPartForAddItem(part: PartCatalogItem, options?: { closeCatalog?: boolean }) {
@@ -7312,7 +7452,16 @@ th{background:#f3f4f6}
                               <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
                               <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
                             </div>
-                            <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                              <button
+                                type="button"
+                                onClick={() => void releaseOfferFromGivenPanel(row.id)}
+                                className="rounded-md border border-red-300 px-2 py-0.5 text-[10px] font-semibold text-red-700"
+                              >
+                                Liberar oferta
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}
@@ -7457,6 +7606,15 @@ th{background:#f3f4f6}
                             >
                               {labels.iHave}
                             </button>
+                            {selectedMiLugPoolItem.item.current_user_offer_quantity > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => void clearWishlistOfferFromPool()}
+                                className="rounded-md border border-red-300 px-3 py-1 text-sm font-semibold text-red-700"
+                              >
+                                Liberar oferta
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -7902,20 +8060,63 @@ th{background:#f3f4f6}
                       </button>
                     </div>
 
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ids = popupVisibleSeriesRows.map((series) => series.id);
+                          if (ids.length === 0) {
+                            return;
+                          }
+                          setMinifigSeriesCheckedById((prev) => {
+                            const next = { ...prev };
+                            ids.forEach((id) => {
+                              next[id] = true;
+                            });
+                            return next;
+                          });
+                          ids.forEach((id) => {
+                            void saveMinifigSeriesPreference(id, { is_selected: true });
+                            void loadMinifigFiguresForSeries(id);
+                          });
+                        }}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                      >
+                        Seleccionar todo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ids = popupVisibleSeriesRows.map((series) => series.id);
+                          if (ids.length === 0) {
+                            return;
+                          }
+                          setMinifigSeriesCheckedById((prev) => {
+                            const next = { ...prev };
+                            ids.forEach((id) => {
+                              next[id] = false;
+                            });
+                            return next;
+                          });
+                          ids.forEach((id) => {
+                            void saveMinifigSeriesPreference(id, { is_selected: false });
+                          });
+                        }}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
+                      >
+                        Deseleccionar todo
+                      </button>
+                    </div>
+
                     <div className="mt-3 max-h-[520px] space-y-2 overflow-auto pr-1">
                       {minifigSeriesLoading ? (
                         <p className="text-sm text-slate-600">{labels.loadingSeries}</p>
-                      ) : (showOnlyFavoriteSeries
-                          ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id]))
-                          : minifigSeriesRows
-                        ).length === 0 ? (
+                      ) : popupVisibleSeriesRows.length === 0 ? (
                         <p className="text-sm text-slate-500">{labels.noSeriesFound}</p>
                       ) : (
-                        (showOnlyFavoriteSeries
-                          ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id]))
-                          : minifigSeriesRows
-                        ).map((series) => (
-                          <label key={`series-popup-${series.id}`} className="flex cursor-pointer items-start gap-2 px-1 py-1">
+                        popupVisibleSeriesRows.map((series) => (
+                          <label key={`series-popup-${series.id}`} className="block cursor-pointer px-1 py-1">
+                            <div className="flex items-start gap-2">
                             <input
                               type="checkbox"
                               checked={Boolean(minifigSeriesCheckedById[series.id])}
@@ -7951,6 +8152,24 @@ th{background:#f3f4f6}
                             >
                               {minifigSeriesFavoriteById[series.id] ? "♥" : "♡"}
                             </button>
+                            </div>
+                            <div className="mt-1 pl-6">
+                              {(() => {
+                                const progress = minifigSeriesProgressById[series.id] ?? { owned: 0, total: 0 };
+                                const percentage = progress.total > 0 ? Math.round((progress.owned / progress.total) * 100) : 0;
+                                return (
+                                  <>
+                                    <div className="h-2 w-full max-w-[260px] overflow-hidden rounded-full border border-slate-200 bg-slate-100">
+                                      <div
+                                        className={`h-full rounded-full ${percentage >= 100 ? "bg-emerald-500" : "bg-slate-400"}`}
+                                        style={{ width: `${Math.max(0, Math.min(100, percentage))}%` }}
+                                      />
+                                    </div>
+                                    <p className="mt-0.5 text-[11px] text-slate-600">{`${progress.owned}/${progress.total}`}</p>
+                                  </>
+                                );
+                              })()}
+                            </div>
                           </label>
                         ))
                       )}
@@ -8309,7 +8528,16 @@ th{background:#f3f4f6}
                           <p className="truncate text-sm font-semibold text-slate-800">{row.userName}</p>
                           <p className="truncate text-xs text-slate-600">{row.partLabel}</p>
                         </div>
-                        <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{row.quantity}</p>
+                          <button
+                            type="button"
+                            onClick={() => void releaseOfferFromGivenPanel(row.id)}
+                            className="rounded-md border border-red-300 px-2 py-0.5 text-[10px] font-semibold text-red-700"
+                          >
+                            Liberar oferta
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
