@@ -11,7 +11,8 @@
     "sync:rebrickable:parts": "node scripts/sync-rebrickable-parts.mjs",
     "sync:rebrickable:minifigs": "node scripts/import-rebrickable-minifig-catalog.mjs",
     "sync:rebrickable:parts:watchdog": "node scripts/sync-rebrickable-parts-watchdog.mjs",
-    "sync:meilisearch:parts": "node scripts/sync-meilisearch-parts.mjs"
+    "sync:meilisearch:parts": "node scripts/sync-meilisearch-parts.mjs",
+    "repair:list-items:imgmatch": "node scripts/repair-list-items-imgmatch.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

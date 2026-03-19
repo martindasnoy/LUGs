@@ -511,7 +511,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [minifigMissingPartsPreviewBySetNum, setMinifigMissingPartsPreviewBySetNum] = useState<Record<string, MinifigFigurePartItem[]>>({});
   const [minifigMissingPartsPreviewLoadingBySetNum, setMinifigMissingPartsPreviewLoadingBySetNum] = useState<Record<string, boolean>>({});
   const [minifigGlobalOwnedStats, setMinifigGlobalOwnedStats] = useState({ complete: 0, missing: 0, total: 0, favorites: 0 });
-  const [minifigContextMissingPiecesCount, setMinifigContextMissingPiecesCount] = useState(0);
+  const [minifigGlobalMissingPiecesCount, setMinifigGlobalMissingPiecesCount] = useState(0);
   const [showCreateListaPanel, setShowCreateListaPanel] = useState(false);
   const [newListaTipo, setNewListaTipo] = useState<ListaTipo>("deseos");
   const [newListaNombre, setNewListaNombre] = useState("");
@@ -2567,10 +2567,6 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     );
     return Array.from(new Set(setNums));
   }, [checkedMinifigSeriesIds, minifigFiguresBySeriesId, minifigSearchQuery, minifigSearchResults]);
-  const minifigContextMissingFiguresCount = useMemo(
-    () => minifigContextFigureSetNums.reduce((acc, setNum) => (minifigSetHasMissingPartsBySetNum[setNum] ? acc + 1 : acc), 0),
-    [minifigContextFigureSetNums, minifigSetHasMissingPartsBySetNum],
-  );
   const minifigContextMissingSetNums = useMemo(
     () => minifigContextFigureSetNums.filter((setNum) => Boolean(minifigSetHasMissingPartsBySetNum[setNum])),
     [minifigContextFigureSetNums, minifigSetHasMissingPartsBySetNum],
@@ -2645,16 +2641,42 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const loadMinifigGlobalOwnedStats = useCallback(async () => {
     if (!supabase || !userId) {
       setMinifigGlobalOwnedStats({ complete: 0, missing: 0, total: 0, favorites: 0 });
+      setMinifigGlobalMissingPiecesCount(0);
       return;
     }
 
-    const { data: inventoryRows, error: inventoryError } = await supabase
-      .from("minifig_user_inventory")
-      .select("set_num, is_owned, is_favorite")
-      .eq("user_id", userId);
+    const { data: statsData, error: statsError } = await supabase.rpc("get_minifig_user_stats_current", { p_user_id: userId });
+    const statsRow = !statsError ? (Array.isArray(statsData) ? statsData[0] : statsData) : null;
+
+    if (statsRow) {
+      const complete = Math.max(0, Number((statsRow as { complete_count?: unknown }).complete_count ?? 0) || 0);
+      const missing = Math.max(0, Number((statsRow as { missing_count?: unknown }).missing_count ?? 0) || 0);
+      const missingPieces = Math.max(0, Number((statsRow as { missing_pieces_count?: unknown }).missing_pieces_count ?? 0) || 0);
+      const total = Math.max(0, Number((statsRow as { total_count?: unknown }).total_count ?? 0) || 0);
+      const favorites = Math.max(0, Number((statsRow as { favorites_count?: unknown }).favorites_count ?? 0) || 0);
+      setMinifigGlobalOwnedStats({ complete, missing, total, favorites });
+      setMinifigGlobalMissingPiecesCount(missingPieces);
+      return;
+    }
+
+    const [{ data: inventoryRows, error: inventoryError }, { data: trackedPartRows, error: trackedPartError }] = await Promise.all([
+      supabase
+        .from("minifig_user_inventory")
+        .select("set_num, is_owned, is_favorite")
+        .eq("user_id", userId),
+      supabase
+        .from("minifig_user_part_inventory")
+        .select("set_num")
+        .eq("user_id", userId),
+    ]);
 
     if (inventoryError) {
       setStatus(`${t.errorPrefix}: ${inventoryError.message}`);
+      return;
+    }
+
+    if (trackedPartError) {
+      setStatus(`${t.errorPrefix}: ${trackedPartError.message}`);
       return;
     }
 
@@ -2671,20 +2693,27 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
           .filter(Boolean),
       ),
     );
-    if (ownedSetNums.length === 0) {
-      setMinifigGlobalOwnedStats({ complete: 0, missing: 0, total: 0, favorites });
-      return;
-    }
+    const missingCandidateSetNums = Array.from(
+      new Set([
+        ...(inventoryRows ?? []).map((row) => String((row as { set_num?: unknown }).set_num ?? "")).filter(Boolean),
+        ...(trackedPartRows ?? []).map((row) => String((row as { set_num?: unknown }).set_num ?? "")).filter(Boolean),
+      ]),
+    );
 
-    const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(ownedSetNums);
+    const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(missingCandidateSetNums);
     if (missingAnalysis.hadError) {
       return;
     }
 
+    setMinifigGlobalMissingPiecesCount(missingAnalysis.missingPieceCount);
+
     const total = ownedSetNums.length;
-    const missingSetCount = Object.values(missingAnalysis.missingBySetNum).reduce((acc, hasMissing) => (hasMissing ? acc + 1 : acc), 0);
-    const complete = Math.max(0, total - missingSetCount);
-    const missing = missingSetCount;
+    const missingOwnedSetCount = ownedSetNums.reduce(
+      (acc, setNum) => (missingAnalysis.missingBySetNum[setNum] ? acc + 1 : acc),
+      0,
+    );
+    const missing = Object.values(missingAnalysis.missingBySetNum).reduce((acc, hasMissing) => (hasMissing ? acc + 1 : acc), 0);
+    const complete = Math.max(0, total - missingOwnedSetCount);
     setMinifigGlobalOwnedStats({ complete, missing, total, favorites });
   }, [loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
 
@@ -4150,6 +4179,22 @@ th{background:#f3f4f6}
     const imgMatchColor = hasSelectedColor ? Boolean(options?.imgMatchColor ?? false) : true;
     const value = options?.value == null ? null : Number(options.value);
 
+    let finalImgMatchColor = imgMatchColor;
+    if (hasSelectedColor && !imgMatchColor) {
+      try {
+        const params = new URLSearchParams({
+          part_num: part.part_num,
+          color_name: cleanColor,
+          mode: colorMode,
+        });
+        const response = await fetch(`/api/rebrickable/part-color-image?${params.toString()}`);
+        const payload = (await response.json()) as { image_url?: string | null };
+        if (response.ok && payload.image_url) {
+          finalImgMatchColor = true;
+        }
+      } catch {}
+    }
+
     setListasSaving(true);
 
     const insertPayload: {
@@ -4165,7 +4210,7 @@ th{background:#f3f4f6}
       part_num: part.part_num,
       part_name: part.name,
       color_name: colorName,
-      imgmatchcolor: imgMatchColor,
+      imgmatchcolor: finalImgMatchColor,
       quantity,
     };
 
@@ -4481,6 +4526,11 @@ th{background:#f3f4f6}
 
   async function deleteListItem(itemId: string) {
     if (!supabase || !selectedListForItems) {
+      return;
+    }
+
+    if (selectedListForItems.nombre === AUTO_MINIFIG_MISSING_LIST_NAME) {
+      setStatus("Los lotes de la lista automatica de CMF no se pueden borrar manualmente.");
       return;
     }
 
@@ -5144,33 +5194,6 @@ th{background:#f3f4f6}
       window.clearTimeout(handle);
     };
   }, [activeSection, loadMinifigSearchResults, minifigSearchQuery]);
-
-  useEffect(() => {
-    if (activeSection !== "minifiguras") {
-      return;
-    }
-
-    if (!supabase || !userId || minifigContextMissingSetNums.length === 0) {
-      setMinifigContextMissingPiecesCount(0);
-      return;
-    }
-
-    let cancelled = false;
-    const handle = window.setTimeout(() => {
-      void (async () => {
-        const analysis = await loadMinifigMissingAnalysisBySetNums(minifigContextMissingSetNums);
-        if (cancelled || analysis.hadError) {
-          return;
-        }
-        setMinifigContextMissingPiecesCount(analysis.missingPieceCount);
-      })();
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [activeSection, loadMinifigMissingAnalysisBySetNums, minifigContextMissingSetNums, supabase, userId]);
 
   useEffect(() => {
     if (!userId || !supabase) {
@@ -6947,14 +6970,16 @@ th{background:#f3f4f6}
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
                                 <p className="truncate text-xs font-semibold text-slate-900">{`${row.part_num || "-"} - ${row.part_name || labels.noNameFallback}`}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => void deleteListItem(row.item_id)}
-                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
-                                  title="Eliminar lote"
-                                >
-                                  🗑
-                                </button>
+                                {selectedListForItems?.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void deleteListItem(row.item_id)}
+                                    className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
+                                    title="Eliminar lote"
+                                  >
+                                    🗑
+                                  </button>
+                                ) : null}
                               </div>
 
                               <div className="mt-2 flex items-center gap-2">
@@ -7951,8 +7976,8 @@ th{background:#f3f4f6}
                     <h2 className="font-boogaloo text-3xl font-normal text-slate-900">{labels.minifigSectionTitle}</h2>
                     <div className="text-sm font-normal leading-5 text-slate-700">
                       <p>{`Completas: ${minifigGlobalOwnedStats.complete}`}</p>
-                      <p>{`Con Faltantes: ${minifigContextMissingFiguresCount}`}</p>
-                      <p>{`Piezas faltantes: ${minifigContextMissingPiecesCount}`}</p>
+                      <p>{`Con Faltantes: ${minifigGlobalOwnedStats.missing}`}</p>
+                      <p>{`Piezas faltantes: ${minifigGlobalMissingPiecesCount}`}</p>
                       <p>{`Tengo en Total: ${minifigGlobalOwnedStats.total}`}</p>
                       <p>{`Favoritas: ${minifigGlobalOwnedStats.favorites}`}</p>
                     </div>
@@ -8672,10 +8697,11 @@ th{background:#f3f4f6}
                           key={item.id}
                           onDoubleClick={() => void openListDetailPage(item)}
                           className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 px-3 py-2"
+                          style={item.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? { backgroundColor: "#f3f4f6" } : undefined}
                         >
                           <Image
-                            src="/api/avatar/pieza_silueta.png"
-                            alt="Pieza"
+                            src={item.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? "/api/avatar/Minifigura_silueta_B.png" : "/api/avatar/pieza_silueta.png"}
+                            alt={item.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? "Minifigura" : "Pieza"}
                             width={52}
                             height={52}
                             unoptimized
@@ -8697,24 +8723,24 @@ th{background:#f3f4f6}
                           </div>
                           <div className="flex flex-col items-end gap-1">
                             <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => void setListaVisibilidad(item.id, "privado")}
-                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
-                                  item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
-                                }`}
-                              >
-                                {labels.private}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void setListaVisibilidad(item.id, "publico")}
-                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
-                                  item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
-                                }`}
-                              >
-                                {labels.public}
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void setListaVisibilidad(item.id, "privado")}
+                                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                    item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {labels.private}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void setListaVisibilidad(item.id, "publico")}
+                                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                    item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {labels.public}
+                                </button>
                             </div>
                             {item.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
                               <button
@@ -8768,24 +8794,24 @@ th{background:#f3f4f6}
                           </div>
                           <div className="flex flex-col items-end gap-1">
                             <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => void setListaVisibilidad(item.id, "privado")}
-                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
-                                  item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
-                                }`}
-                              >
-                                {labels.private}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void setListaVisibilidad(item.id, "publico")}
-                                className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
-                                  item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
-                                }`}
-                              >
-                                {labels.public}
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void setListaVisibilidad(item.id, "privado")}
+                                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                    item.visibilidad === "privado" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {labels.private}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void setListaVisibilidad(item.id, "publico")}
+                                  className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                                    item.visibilidad === "publico" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {labels.public}
+                                </button>
                             </div>
                             {item.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
                               <button
