@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { getSupabaseClient } from "@/lib/supabase/client";
@@ -35,6 +35,19 @@ type LugMemberItem = {
 
 const PAGE_SIZE = 40;
 
+function getContrastTextColor(hexColor: string) {
+  const clean = String(hexColor || "").replace("#", "").trim();
+  const normalized = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
+    return "#0f172a";
+  }
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.6 ? "#0f172a" : "#ffffff";
+}
+
 function formatRelativeTime(value: string | null) {
   if (!value) {
     return "";
@@ -60,6 +73,26 @@ function normalizeRoomType(value: string): "direct" | "group" | "lug" {
   return "group";
 }
 
+function getRoomDisplayName(room: ChatRoomItem, currentUserId: string | null, namesById: Record<string, string>) {
+  const participants = Array.isArray(room.participant_ids) ? room.participant_ids : [];
+  if (currentUserId && participants.length === 2 && participants.includes(currentUserId)) {
+    const otherId = participants.find((id) => id !== currentUserId);
+    if (otherId) {
+      return namesById[otherId] || "Chat directo";
+    }
+  }
+
+  if (room.room_type === "direct") {
+    const otherId = participants.find((id) => id !== currentUserId);
+    if (otherId) {
+      return namesById[otherId] || "Chat directo";
+    }
+    return "Chat directo";
+  }
+
+  return room.room_name || "Grupo";
+}
+
 export default function ChatsClient({ initialRoomId }: { initialRoomId?: string }) {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseClient(), []);
@@ -75,12 +108,10 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [composerText, setComposerText] = useState("");
   const [sending, setSending] = useState(false);
-  const [lugMembers, setLugMembers] = useState<LugMemberItem[]>([]);
-  const [selectedDirectMemberId, setSelectedDirectMemberId] = useState<string>("");
-  const [groupNameInput, setGroupNameInput] = useState("");
-  const [groupMemberIds, setGroupMemberIds] = useState<Record<string, boolean>>({});
   const [nameById, setNameById] = useState<Record<string, string>>({});
   const [avatarById, setAvatarById] = useState<Record<string, string>>({});
+  const [lugColor1, setLugColor1] = useState("#009fe3");
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
 
   const getSupabaseAuthHeaders = useCallback(async () => {
     if (!supabase) {
@@ -157,6 +188,12 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
     const { data: profileData } = await supabase.from("profiles").select("current_lug_id").eq("id", id).maybeSingle();
     const currentLugId = String((profileData as { current_lug_id?: unknown } | null)?.current_lug_id ?? "").trim();
     if (currentLugId) {
+      const { data: lugData } = await supabase.from("lugs").select("color1, color2").eq("lug_id", currentLugId).maybeSingle();
+      const color1 = String((lugData as { color1?: unknown } | null)?.color1 ?? "").trim();
+      if (color1) {
+        setLugColor1(color1);
+      }
+
       const { data: membersData, error: membersError } = await supabase.rpc("get_lug_members_current", { target_lug_id: currentLugId });
       if (membersError) {
         setStatus(membersError.message);
@@ -171,7 +208,6 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
             })(),
           }))
           .filter((row: LugMemberItem) => row.id);
-        setLugMembers(members);
         setNameById((prev) => {
           const next = { ...prev };
           members.forEach((member: LugMemberItem) => {
@@ -340,14 +376,7 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
     if (!selectedRoom) {
       return "";
     }
-    if (selectedRoom.room_type !== "direct") {
-      return selectedRoom.room_name || "Grupo";
-    }
-    const otherId = selectedRoom.participant_ids.find((id) => id !== userId);
-    if (!otherId) {
-      return "Chat directo";
-    }
-    return nameById[otherId] || "Chat directo";
+    return getRoomDisplayName(selectedRoom, userId, nameById);
   }, [nameById, selectedRoom, userId]);
 
   useEffect(() => {
@@ -410,6 +439,24 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
       window.clearTimeout(handle);
     };
   }, [loadMessages, selectedRoomId]);
+
+  useEffect(() => {
+    if (!selectedRoomId) {
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      const container = messagesScrollRef.current;
+      if (!container) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+    }, 0);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [messages.length, selectedRoomId]);
 
   useEffect(() => {
     if (!selectedRoomId) {
@@ -504,58 +551,6 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
     };
   }, [loadIdentityMaps, loadRooms, markRoomAsRead, selectedRoomId, supabase, userId]);
 
-  const startDirectChat = useCallback(async () => {
-    if (!supabase || !selectedDirectMemberId) {
-      return;
-    }
-
-    const { data, error } = await supabase.rpc("chat_get_or_create_direct_room", { p_other_user_id: selectedDirectMemberId });
-    if (error) {
-      setStatus(error.message);
-      return;
-    }
-
-    const roomId = String(data ?? "").trim();
-    if (!roomId) {
-      return;
-    }
-
-    setSelectedRoomId(roomId);
-    setSelectedDirectMemberId("");
-    await loadRooms();
-  }, [loadRooms, selectedDirectMemberId, supabase]);
-
-  const createGroupChat = useCallback(async () => {
-    if (!supabase) {
-      return;
-    }
-
-    const memberIds = Object.entries(groupMemberIds)
-      .filter(([, checked]) => checked)
-      .map(([id]) => id)
-      .filter(Boolean);
-
-    const { data, error } = await supabase.rpc("chat_create_group_room", {
-      p_name: groupNameInput,
-      p_member_ids: memberIds,
-    });
-
-    if (error) {
-      setStatus(error.message);
-      return;
-    }
-
-    const roomId = String(data ?? "").trim();
-    if (!roomId) {
-      return;
-    }
-
-    setGroupNameInput("");
-    setGroupMemberIds({});
-    setSelectedRoomId(roomId);
-    await loadRooms();
-  }, [groupMemberIds, groupNameInput, loadRooms, supabase]);
-
   const sendMessage = useCallback(async () => {
     const text = composerText.trim();
     if (!supabase || !selectedRoomId || !userId || !text || sending) {
@@ -587,12 +582,11 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
     await loadMessages(selectedRoomId, { beforeCreatedAt: oldestMessageAt });
   }, [hasOlderMessages, loadMessages, oldestMessageAt, selectedRoomId]);
 
-  const selectableLugMembers = useMemo(() => lugMembers.filter((member) => member.id !== userId), [lugMembers, userId]);
-
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-4">
-      <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-3">
-        <header className="rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-sm">
+    <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+      <div className="mx-auto h-[800px] w-full max-w-[1000px] rounded-2xl border-[10px] border-[#009fe3] p-[1px] shadow-xl">
+        <div className="flex h-full flex-col overflow-hidden rounded-xl border-[5px] border-white bg-white p-4 sm:p-8">
+          <header>
           <div className="flex items-center justify-between gap-3">
             <div>
               <h1 className="font-boogaloo text-3xl text-slate-900">Chats</h1>
@@ -606,75 +600,13 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
               Volver
             </button>
           </div>
+        <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: lugColor1 }} />
           {status ? <p className="mt-2 text-xs text-slate-700">{status}</p> : null}
-        </header>
+          </header>
 
-        <div className="grid min-h-[78vh] grid-cols-1 gap-3 md:grid-cols-[360px,1fr]">
-          <aside className="rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
-            <div className="space-y-3">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Nuevo directo</p>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={selectedDirectMemberId}
-                    onChange={(event) => setSelectedDirectMemberId(event.target.value)}
-                    className="h-9 flex-1 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800"
-                  >
-                    <option value="">Elegir miembro</option>
-                    {selectableLugMembers.map((member) => (
-                      <option key={`direct-member-${member.id}`} value={member.id}>
-                        {member.full_name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => void startDirectChat()}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                  >
-                    Abrir
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Nuevo grupo</p>
-                <input
-                  type="text"
-                  value={groupNameInput}
-                  onChange={(event) => setGroupNameInput(event.target.value)}
-                  placeholder="Nombre del grupo"
-                  className="mb-2 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800"
-                />
-                <div className="max-h-28 space-y-1 overflow-y-auto rounded-md border border-slate-200 bg-white p-2">
-                  {selectableLugMembers.length === 0 ? <p className="text-xs text-slate-500">Sin miembros disponibles.</p> : null}
-                  {selectableLugMembers.map((member) => (
-                    <label key={`group-member-${member.id}`} className="flex items-center gap-2 text-xs text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(groupMemberIds[member.id])}
-                        onChange={(event) =>
-                          setGroupMemberIds((prev) => ({
-                            ...prev,
-                            [member.id]: event.target.checked,
-                          }))
-                        }
-                      />
-                      <span className="truncate">{member.full_name}</span>
-                    </label>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void createGroupChat()}
-                  className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                >
-                  Crear grupo
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-4 border-t border-slate-200 pt-3">
+        <div className="mt-3 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden md:grid-cols-3">
+          <aside className="min-h-0 overflow-hidden rounded-xl border border-slate-300 bg-white p-3 shadow-sm md:col-span-1">
+            <div className="flex h-full min-h-0 flex-col border-t border-slate-200 pt-3">
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Conversaciones</p>
                 <button
@@ -686,19 +618,12 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
                 </button>
               </div>
 
-              <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                 {roomsLoading ? <p className="text-xs text-slate-500">Cargando chats...</p> : null}
                 {!roomsLoading && rooms.length === 0 ? <p className="text-xs text-slate-500">Todavia no tenes chats.</p> : null}
                 {rooms.map((room) => {
                   const isSelected = room.room_id === selectedRoomId;
-                  const title = (() => {
-                    if (room.room_type !== "direct") {
-                      return room.room_name || "Grupo";
-                    }
-                    const otherId = room.participant_ids.find((id) => id !== userId);
-                    if (!otherId) return "Chat directo";
-                    return nameById[otherId] || "Chat directo";
-                  })();
+                  const title = getRoomDisplayName(room, userId, nameById);
 
                   const preview = room.last_message_content || "Sin mensajes";
                   return (
@@ -707,8 +632,9 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
                       type="button"
                       onClick={() => setSelectedRoomId(room.room_id)}
                       className={`w-full rounded-lg border px-3 py-2 text-left ${
-                        isSelected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-800"
+                        isSelected ? "border-transparent" : "border-slate-300 bg-white text-slate-800"
                       }`}
+                      style={isSelected ? { backgroundColor: lugColor1, color: getContrastTextColor(lugColor1) } : undefined}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <p className="truncate text-sm font-semibold">{title}</p>
@@ -727,19 +653,19 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
             </div>
           </aside>
 
-          <section className="rounded-xl border border-slate-300 bg-white shadow-sm">
+          <section className="min-h-0 overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm md:col-span-2">
             {!selectedRoom ? (
-              <div className="flex h-full min-h-[380px] items-center justify-center p-6">
+              <div className="flex h-full min-h-0 items-center justify-center p-6">
                 <p className="text-sm text-slate-500">Selecciona o crea una conversacion para empezar.</p>
               </div>
             ) : (
-              <div className="flex h-full min-h-[380px] flex-col">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden">
                 <header className="border-b border-slate-200 px-4 py-3">
                   <p className="truncate text-base font-semibold text-slate-900">{selectedRoomTitle}</p>
                   <p className="text-xs text-slate-500">{selectedRoom.room_type === "direct" ? "Directo" : "Grupal"}</p>
                 </header>
 
-                <div className="flex-1 overflow-y-auto bg-slate-50 px-3 py-3 sm:px-4">
+                <div ref={messagesScrollRef} className="min-h-0 flex-1 overflow-y-auto bg-slate-50 px-3 py-3 sm:px-4">
                   {hasOlderMessages ? (
                     <div className="mb-3 text-center">
                       <button
@@ -813,7 +739,11 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
             )}
           </section>
         </div>
+        </div>
       </div>
-    </div>
+      <div className="mt-2 w-full px-2 text-center">
+        <p className="mx-auto inline-block px-2 text-xs font-semibold tracking-wide text-[#a8a8a8]">LUGs App</p>
+      </div>
+    </main>
   );
 }

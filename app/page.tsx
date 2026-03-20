@@ -43,6 +43,8 @@ type UnreadChatRoomAlertItem = {
   room_id: string;
   room_type: string;
   room_name: string | null;
+  participant_ids: string[];
+  peer_user_id: string | null;
   unread_count: number;
   last_message_content: string | null;
   last_message_at: string | null;
@@ -488,6 +490,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [showUnreadChatsPopup, setShowUnreadChatsPopup] = useState(false);
   const [unreadChatsPopupLoading, setUnreadChatsPopupLoading] = useState(false);
   const [unreadChatsRooms, setUnreadChatsRooms] = useState<UnreadChatRoomAlertItem[]>([]);
+  const [unreadChatNameByUserId, setUnreadChatNameByUserId] = useState<Record<string, string>>({});
   const [masterEmptyNotificationsCount, setMasterEmptyNotificationsCount] = useState(0);
   const [showMasterEmptyLugsPanel, setShowMasterEmptyLugsPanel] = useState(false);
   const [masterEmptyLugsLoading, setMasterEmptyLugsLoading] = useState(false);
@@ -595,13 +598,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [miLugSaleSort, setMiLugSaleSort] = useState<"codigo" | "color" | "usuario" | "price_asc" | "price_desc">("codigo");
   const [miLugWishlistPage, setMiLugWishlistPage] = useState(1);
   const [miLugSalePage, setMiLugSalePage] = useState(1);
-  const [miLugExpandedPool, setMiLugExpandedPool] = useState<"wishlist" | "venta" | null>("wishlist");
+  const [miLugMembersPage, setMiLugMembersPage] = useState(1);
+  const [showMiLugWishlistPoolPanel, setShowMiLugWishlistPoolPanel] = useState(false);
+  const [showMiLugSalesPoolPanel, setShowMiLugSalesPoolPanel] = useState(false);
   const [miLugPoolsLoading, setMiLugPoolsLoading] = useState(false);
   const [selectedMiLugPoolItem, setSelectedMiLugPoolItem] = useState<{ type: "wishlist" | "venta"; item: MiLugPoolItem } | null>(null);
   const [miLugOfferQuantityInput, setMiLugOfferQuantityInput] = useState("1");
   const [showMiLugMembersPanel, setShowMiLugMembersPanel] = useState(false);
   const [miLugMembersLoading, setMiLugMembersLoading] = useState(false);
   const [miLugMembersRows, setMiLugMembersRows] = useState<LugMemberItem[]>([]);
+  const [selectedMiLugMemberCard, setSelectedMiLugMemberCard] = useState<LugMemberItem | null>(null);
   const [listItemOffersById, setListItemOffersById] = useState<Record<string, WishlistOfferDetail[]>>({});
   const [selectedListItemOffers, setSelectedListItemOffers] = useState<{
     partLabel: string;
@@ -1372,6 +1378,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const uiColor1Text = getContrastTextColor(uiColor1);
   const currentLugDisplayName = miLugHeaderName || lugInfoData?.nombre || currentUserLug?.nombre || "Mi LUG";
   const miLugPoolPageSize = 18;
+  const miLugMembersPageSize = 16;
 
   const fetchProfileNamesByIds = useCallback(async (ids: string[]) => {
     const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
@@ -1596,6 +1603,15 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const from = Math.max(0, (miLugSaleCurrentPage - 1) * miLugPoolPageSize);
     return miLugSaleSortedItems.slice(from, from + miLugPoolPageSize);
   }, [miLugSaleCurrentPage, miLugSaleSortedItems]);
+  const miLugMembersMaxPage = useMemo(
+    () => Math.max(1, Math.ceil(miLugMembersRows.length / miLugMembersPageSize)),
+    [miLugMembersRows.length],
+  );
+  const miLugMembersCurrentPage = useMemo(() => Math.min(miLugMembersPage, miLugMembersMaxPage), [miLugMembersMaxPage, miLugMembersPage]);
+  const miLugMembersVisibleRows = useMemo(() => {
+    const from = Math.max(0, (miLugMembersCurrentPage - 1) * miLugMembersPageSize);
+    return miLugMembersRows.slice(from, from + miLugMembersPageSize);
+  }, [miLugMembersCurrentPage, miLugMembersRows]);
   const useColoredPreview = Boolean(
     selectedSearchPart?.part_num && addItemColorNameInput.trim() && addItemColorNameInput !== NO_COLOR_LABEL,
   );
@@ -2784,28 +2800,67 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     const rows: UnreadChatRoomAlertItem[] = ((data ?? []) as Array<Record<string, unknown>>)
-      .map((row) => ({
-        room_id: String(row.room_id ?? "").trim(),
-        room_type: String(row.room_type ?? "group").trim(),
-        room_name: (() => {
-          const value = String(row.room_name ?? "").trim();
-          return value || null;
-        })(),
-        unread_count: Math.max(0, Number(row.unread_count ?? 0) || 0),
-        last_message_content: (() => {
-          const value = String(row.last_message_content ?? "");
-          return value || null;
-        })(),
-        last_message_at: (() => {
-          const value = String(row.last_message_at ?? "").trim();
-          return value || null;
-        })(),
-      }))
+      .map((row) => {
+        const participantIds = Array.isArray(row.participant_ids)
+          ? (row.participant_ids as unknown[]).map((value) => String(value ?? "").trim()).filter(Boolean)
+          : [];
+        const roomUserId = String(userId ?? "").trim().toLowerCase();
+        const peerUserId = roomUserId && participantIds.length === 2
+          ? participantIds.find((id) => String(id).toLowerCase() !== roomUserId) ?? null
+          : null;
+
+        return {
+          room_id: String(row.room_id ?? "").trim(),
+          room_type: String(row.room_type ?? "group").trim(),
+          room_name: (() => {
+            const value = String(row.room_name ?? "").trim();
+            return value || null;
+          })(),
+          participant_ids: participantIds,
+          peer_user_id: peerUserId,
+          unread_count: Math.max(0, Number(row.unread_count ?? 0) || 0),
+          last_message_content: (() => {
+            const value = String(row.last_message_content ?? "");
+            return value || null;
+          })(),
+          last_message_at: (() => {
+            const value = String(row.last_message_at ?? "").trim();
+            return value || null;
+          })(),
+        };
+      })
       .filter((row) => row.room_id);
 
     setUnreadChatsRooms(rows);
+
+    const idsToResolve = Array.from(
+      new Set(
+        rows
+          .flatMap((room) => (room.peer_user_id ? [room.peer_user_id] : []))
+          .map((id) => String(id).trim())
+          .filter((id) => id && id !== userId),
+      ),
+    );
+
+    if (idsToResolve.length > 0) {
+      const authHeaders = await getSupabaseAuthHeaders();
+      const namesResponse = await fetch("/api/profiles/names", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({ ids: idsToResolve }),
+      });
+
+      const payload = (await namesResponse.json().catch(() => ({}))) as { names?: Record<string, string> };
+      if (payload.names) {
+        setUnreadChatNameByUserId((prev) => ({ ...prev, ...payload.names }));
+      }
+    }
+
     setUnreadChatsPopupLoading(false);
-  }, [supabase, t.errorPrefix, userId]);
+  }, [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId]);
 
   const saveMinifigUiPreferences = useCallback(
     async (patch: { show_only_favorite_series?: boolean; show_only_favorite_figures?: boolean }) => {
@@ -5476,6 +5531,10 @@ th{background:#f3f4f6}
   }, [selectedListForItems?.id]);
 
   useEffect(() => {
+    setMiLugMembersPage(1);
+  }, [miLugMembersRows.length]);
+
+  useEffect(() => {
     if (!userId || !currentLugId) {
       return;
     }
@@ -5485,6 +5544,17 @@ th{background:#f3f4f6}
 
     void loadMiLugPools();
   }, [activeSection, currentLugId, loadMiLugPools, userId]);
+
+  useEffect(() => {
+    if (!userId || !currentLugId) {
+      return;
+    }
+    if (activeSection !== "mi_lug") {
+      return;
+    }
+
+    void loadMiLugMembersList();
+  }, [activeSection, currentLugId, userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeSection !== "minifiguras") {
@@ -5499,12 +5569,6 @@ th{background:#f3f4f6}
       void loadMinifigFiguresForSeries(seriesId);
     });
   }, [activeSection, checkedMinifigSeriesIds, loadMinifigFiguresForSeries, minifigFiguresBySeriesId]);
-
-  useEffect(() => {
-    if (activeSection === "mi_lug") {
-      setMiLugExpandedPool("wishlist");
-    }
-  }, [activeSection]);
 
   useEffect(() => {
     if (!supabase || !currentLugId) {
@@ -6294,12 +6358,14 @@ th{background:#f3f4f6}
     await loadMasterEmptyNotificationsList();
   }
 
-  async function openMiLugMembersPanel() {
+  async function loadMiLugMembersList(options?: { openPanel?: boolean }) {
     if (!supabase || !currentLugId) {
       return;
     }
 
-    setShowMiLugMembersPanel(true);
+    if (options?.openPanel) {
+      setShowMiLugMembersPanel(true);
+    }
     setMiLugMembersLoading(true);
 
     const { data, error } = await supabase.rpc("get_lug_members_current", {
@@ -6329,6 +6395,10 @@ th{background:#f3f4f6}
 
     setMiLugMembersRows(members);
     setMiLugMembersLoading(false);
+  }
+
+  async function openMiLugMembersPanel() {
+    await loadMiLugMembersList({ openPanel: true });
   }
 
   async function promoteMiLugMemberToAdmin(memberId: string, memberName: string) {
@@ -7066,7 +7136,33 @@ th{background:#f3f4f6}
           ) : (
             unreadChatsRooms.map((room) => {
               const hasUnread = room.unread_count > 0;
-              const title = room.room_name || (room.room_type === "direct" ? "Chat directo" : "Grupo");
+              const title = (() => {
+                if (room.peer_user_id) {
+                  const resolved = unreadChatNameByUserId[room.peer_user_id];
+                  if (resolved) {
+                    return resolved;
+                  }
+                }
+
+                const cleanedRoomName = String(room.room_name ?? "").replace(/^chat\s+/i, "").trim();
+                if (cleanedRoomName.includes("+")) {
+                  const displayNameNormalized = String(displayName ?? "").trim().toLowerCase();
+                  const parts = cleanedRoomName.split("+").map((part) => part.trim()).filter(Boolean);
+                  if (parts.length > 0) {
+                    const otherPart = parts.find((part) => part.toLowerCase() !== displayNameNormalized);
+                    if (otherPart) {
+                      return otherPart;
+                    }
+                    return parts[0];
+                  }
+                }
+
+                if (cleanedRoomName) {
+                  return cleanedRoomName;
+                }
+
+                return room.room_name || (room.room_type === "direct" ? "Chat directo" : "Grupo");
+              })();
               const preview = room.last_message_content || "Sin mensajes";
               return (
                 <button
@@ -8012,18 +8108,6 @@ th{background:#f3f4f6}
                       />
                     ) : null}
                     <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">{currentLugDisplayName}</h2>
-                    <button
-                      type="button"
-                      onClick={() => void openMiLugMembersPanel()}
-                      className="rounded-md border px-3 py-1 text-xs font-semibold"
-                      style={{
-                        backgroundColor: currentLugColor1 || "#006eb2",
-                        color: getContrastTextColor(currentLugColor1 || "#006eb2"),
-                        borderColor: currentLugColor3 || "#111111",
-                      }}
-                    >
-                      {labels.members}
-                    </button>
                   </div>
                   <button
                     type="button"
@@ -8039,225 +8123,101 @@ th{background:#f3f4f6}
                 <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
               </header>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void openOffersGivenPanel()}
-                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
-                >
-                  {labels.offeredToOthers}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openOffersReceivedPanel()}
-                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700"
-                >
-                  {labels.offeredToMe}
-                </button>
-              </div>
-
               <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setMiLugExpandedPool((prev) => (prev === "wishlist" ? null : "wishlist"))}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-base font-semibold text-slate-700"
-                      title={miLugExpandedPool === "wishlist" ? "Minimizar" : "Maximizar"}
-                      aria-label={miLugExpandedPool === "wishlist" ? "Minimizar pool de wishlist" : "Maximizar pool de wishlist"}
-                    >
-                      {miLugExpandedPool === "wishlist" ? "▾" : "▸"}
-                    </button>
-                  <p className="font-boogaloo text-lg text-slate-900">{labels.poolWishlist}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={miLugWishlistSort}
-                      onChange={(event) => {
-                        setMiLugWishlistSort(event.target.value as "codigo" | "color" | "usuario");
-                        setMiLugWishlistPage(1);
-                      }}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
-                    >
-                      <option value="codigo">{labels.sortCode}</option>
-                      <option value="color">{labels.sortColor}</option>
-                      <option value="usuario">{labels.sortUser}</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setMiLugWishlistPage((prev) => Math.max(1, prev - 1))}
-                      disabled={miLugWishlistCurrentPage <= 1}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
-                    >
-                      ←
-                    </button>
-                    <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugWishlistCurrentPage} / ${miLugWishlistMaxPage}`}</p>
-                    <button
-                      type="button"
-                      onClick={() => setMiLugWishlistPage((prev) => Math.min(miLugWishlistMaxPage, prev + 1))}
-                      disabled={miLugWishlistCurrentPage >= miLugWishlistMaxPage}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
-                    >
-                      →
-                    </button>
-                  </div>
+                  <h3 className="font-boogaloo text-xl text-slate-900">Integrantes</h3>
+                  {miLugMembersMaxPage > 1 ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMiLugMembersPage((prev) => Math.max(1, prev - 1))}
+                        disabled={miLugMembersCurrentPage <= 1}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                      >
+                        ←
+                      </button>
+                      <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugMembersCurrentPage} / ${miLugMembersMaxPage}`}</p>
+                      <button
+                        type="button"
+                        onClick={() => setMiLugMembersPage((prev) => Math.min(miLugMembersMaxPage, prev + 1))}
+                        disabled={miLugMembersCurrentPage >= miLugMembersMaxPage}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                      >
+                        →
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-                {miLugExpandedPool === "wishlist" ? (
-                  <div className="mt-3 grid grid-cols-6 gap-2">
-                    {miLugPoolWishlistItems.length === 0 ? (
-                      <p className="col-span-6 text-sm text-slate-500">{labels.noPublicWishlist}</p>
-                    ) : (
-                      miLugWishlistVisibleItems.map((item) => (
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-8">
+                  {miLugMembersLoading ? (
+                    <p className="col-span-full text-sm text-slate-600">{labels.loadingMembers}</p>
+                  ) : miLugMembersRows.length === 0 ? (
+                    <p className="col-span-full text-sm text-slate-500">{labels.noMembers}</p>
+                  ) : (
+                    miLugMembersVisibleRows.map((member) => {
+                      const isCurrentViewer = member.id === userId;
+                      return (
                         <button
-                          key={`wish-${item.id}`}
+                          key={`tile-member-${member.id}`}
                           type="button"
-                          onClick={() => setSelectedMiLugPoolItem({ type: "wishlist", item })}
-                          className="rounded-md border border-slate-300 bg-white p-2 text-center"
+                          onClick={() => setSelectedMiLugMemberCard(member)}
+                          className="h-24 rounded-md border border-slate-300 bg-white p-2 text-left"
+                          style={isCurrentViewer ? { backgroundColor: currentLugColor2 || "#ffffff" } : undefined}
                         >
-                          <div
-                            className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
-                              item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
-                            }`}
-                          >
-                            {item.part_img_url ? (
+                          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                            <div className="h-12 w-12 border border-slate-200 bg-slate-50 p-1">
                               <Image
-                                src={item.part_img_url}
-                                alt={item.part_name}
-                                width={56}
-                                height={56}
+                                src={getFaceImagePath(getAvatarFaceForMember(member.id, member.avatar_key))}
+                                alt={member.full_name}
+                                width={40}
+                                height={40}
                                 unoptimized
-                                className="h-[56px] w-[56px] object-contain"
+                                className="h-full w-full object-contain"
                               />
-                            ) : null}
-                            {!item.imgmatchcolor ? (
-                              <span
-                                className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
-                                title="El color de esta pieza no es el mostrado en la imagen"
-                              >
-                                <Image
-                                  src="/api/avatar/Exclamacion.svg"
-                                  alt="Advertencia"
-                                  width={16}
-                                  height={16}
-                                  unoptimized
-                                  className="h-4 w-4 object-contain"
-                                />
-                              </span>
-                            ) : null}
+                            </div>
+                            <p className="w-full break-words text-xs font-semibold leading-tight text-slate-800">{member.full_name}</p>
                           </div>
-                          <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
-                          <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
-                          <p className="font-boogaloo text-xl leading-none text-slate-900">{item.remaining_quantity}</p>
-                          {item.current_user_offer_quantity > 0 ? (
-                            <p className="text-[10px] font-semibold text-emerald-700">{`Yo ofrecí ${item.current_user_offer_quantity}`}</p>
-                          ) : null}
                         </button>
-                      ))
-                    )}
-                  </div>
-                ) : null}
+                      );
+                    })
+                  )}
+                </div>
               </section>
 
-              <section className="mt-3 rounded-xl border border-slate-300 bg-slate-50 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setMiLugExpandedPool((prev) => (prev === "venta" ? null : "venta"))}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-base font-semibold text-slate-700"
-                      title={miLugExpandedPool === "venta" ? "Minimizar" : "Maximizar"}
-                      aria-label={miLugExpandedPool === "venta" ? "Minimizar pool de ventas" : "Maximizar pool de ventas"}
-                    >
-                      {miLugExpandedPool === "venta" ? "▾" : "▸"}
-                    </button>
-                  <p className="font-boogaloo text-lg text-slate-900">{labels.poolSales}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={miLugSaleSort}
-                      onChange={(event) => {
-                        setMiLugSaleSort(event.target.value as "codigo" | "color" | "usuario" | "price_asc" | "price_desc");
-                        setMiLugSalePage(1);
-                      }}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
-                    >
-                      <option value="codigo">{labels.sortCode}</option>
-                      <option value="color">{labels.sortColor}</option>
-                      <option value="usuario">{labels.sortUser}</option>
-                      <option value="price_asc">{labels.sortPriceAsc}</option>
-                      <option value="price_desc">{labels.sortPriceDesc}</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setMiLugSalePage((prev) => Math.max(1, prev - 1))}
-                      disabled={miLugSaleCurrentPage <= 1}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
-                    >
-                      ←
-                    </button>
-                    <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugSaleCurrentPage} / ${miLugSaleMaxPage}`}</p>
-                    <button
-                      type="button"
-                      onClick={() => setMiLugSalePage((prev) => Math.min(miLugSaleMaxPage, prev + 1))}
-                      disabled={miLugSaleCurrentPage >= miLugSaleMaxPage}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
-                    >
-                      →
-                    </button>
-                  </div>
+              <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-4">
+                <h3 className="font-boogaloo text-xl text-slate-900">POOL</h3>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void openOffersGivenPanel()}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                  >
+                    {labels.offeredToOthers}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void openOffersReceivedPanel()}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                  >
+                    {labels.offeredToMe}
+                  </button>
                 </div>
-                {miLugExpandedPool === "venta" ? (
-                  <div className="mt-3 grid grid-cols-6 gap-2">
-                    {miLugPoolSaleItems.length === 0 ? (
-                      <p className="col-span-6 text-sm text-slate-500">{labels.noPublicSales}</p>
-                    ) : (
-                      miLugSaleVisibleItems.map((item) => (
-                        <button
-                          key={`sale-${item.id}`}
-                          type="button"
-                          onClick={() => setSelectedMiLugPoolItem({ type: "venta", item })}
-                          className="rounded-md border border-slate-300 bg-white p-2 text-center"
-                        >
-                          <p className="mb-1 font-boogaloo text-xl leading-none text-emerald-700">{item.value == null ? "$-" : `$${item.value}`}</p>
-                          <div
-                            className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
-                              item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
-                            }`}
-                          >
-                            {item.part_img_url ? (
-                              <Image
-                                src={item.part_img_url}
-                                alt={item.part_name}
-                                width={56}
-                                height={56}
-                                unoptimized
-                                className="h-[56px] w-[56px] object-contain"
-                              />
-                            ) : null}
-                            {!item.imgmatchcolor ? (
-                              <span
-                                className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center"
-                                title="El color de esta pieza no es el mostrado en la imagen"
-                              >
-                                <Image
-                                  src="/api/avatar/Exclamacion.svg"
-                                  alt="Advertencia"
-                                  width={16}
-                                  height={16}
-                                  unoptimized
-                                  className="h-4 w-4 object-contain"
-                                />
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
-                          <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
-                          <p className="font-boogaloo text-xl leading-none text-slate-900">{item.quantity}</p>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                ) : null}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMiLugWishlistPoolPanel(true)}
+                    className="h-16 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                  >
+                    {labels.poolWishlist}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMiLugSalesPoolPanel(true)}
+                    className="h-16 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                  >
+                    {labels.poolSales}
+                  </button>
+                </div>
               </section>
 
               {showMiLugMembersPanel ? (
@@ -8369,6 +8329,57 @@ th{background:#f3f4f6}
                 </div>
               ) : null}
 
+              {selectedMiLugMemberCard ? (
+                <div className="fixed inset-0 z-[71] flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setSelectedMiLugMemberCard(null)}>
+                  <div className="w-full max-w-[290px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex flex-col items-center gap-3 text-center">
+                      <div className="h-20 w-20 border border-slate-200 bg-slate-50 p-1">
+                        <Image
+                          src={getFaceImagePath(getAvatarFaceForMember(selectedMiLugMemberCard.id, selectedMiLugMemberCard.avatar_key))}
+                          alt={selectedMiLugMemberCard.full_name}
+                          width={72}
+                          height={72}
+                          unoptimized
+                          className="h-full w-full object-contain"
+                        />
+                      </div>
+                      <p className="text-2xl font-normal text-slate-900" style={{ fontFamily: "Chewy, cursive" }}>
+                        {selectedMiLugMemberCard.full_name}
+                      </p>
+                      {selectedMiLugMemberCard.rol_lug === "admin" ? (
+                        <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white">ADMIN</span>
+                      ) : null}
+                      <p className="flex items-center gap-1 text-sm text-slate-700">
+                        <span>{getSocialPlatformLabel(selectedMiLugMemberCard.social_platform).logo}</span>
+                        <span>{selectedMiLugMemberCard.social_handle || labels.noSocial}</span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const member = selectedMiLugMemberCard;
+                          setSelectedMiLugMemberCard(null);
+                          if (member) {
+                            void openMiLugMemberChat(member.id, member.full_name);
+                          }
+                        }}
+                        disabled={memberChatLoadingId === selectedMiLugMemberCard.id || selectedMiLugMemberCard.id === userId}
+                        className="rounded-md border border-slate-300 bg-white p-1 disabled:cursor-not-allowed disabled:opacity-60"
+                        title="Abrir chat"
+                      >
+                        <Image
+                          src="/api/avatar/Mensaje_A.svg"
+                          alt="Mensaje"
+                          width={24}
+                          height={24}
+                          unoptimized
+                          className="h-6 w-6 object-contain"
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {memberChatPopupOverlay}
 
               {showOffersGivenPanel ? (
@@ -8461,6 +8472,204 @@ th{background:#f3f4f6}
                           </div>
                         ))
                       )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showMiLugWishlistPoolPanel ? (
+                <div className="fixed inset-0 z-[56] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowMiLugWishlistPoolPanel(false)}>
+                  <div className="w-full max-w-[980px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-boogaloo text-xl text-slate-900">{labels.poolWishlist}</p>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={miLugWishlistSort}
+                          onChange={(event) => {
+                            setMiLugWishlistSort(event.target.value as "codigo" | "color" | "usuario");
+                            setMiLugWishlistPage(1);
+                          }}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
+                        >
+                          <option value="codigo">{labels.sortCode}</option>
+                          <option value="color">{labels.sortColor}</option>
+                          <option value="usuario">{labels.sortUser}</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setMiLugWishlistPage((prev) => Math.max(1, prev - 1))}
+                          disabled={miLugWishlistCurrentPage <= 1}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                        >
+                          ←
+                        </button>
+                        <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugWishlistCurrentPage} / ${miLugWishlistMaxPage}`}</p>
+                        <button
+                          type="button"
+                          onClick={() => setMiLugWishlistPage((prev) => Math.min(miLugWishlistMaxPage, prev + 1))}
+                          disabled={miLugWishlistCurrentPage >= miLugWishlistMaxPage}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                        >
+                          →
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowMiLugWishlistPoolPanel(false)}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                        >
+                          {labels.close}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 max-h-[520px] overflow-auto">
+                      <div className="grid grid-cols-6 gap-2">
+                        {miLugPoolWishlistItems.length === 0 ? (
+                          <p className="col-span-6 text-sm text-slate-500">{labels.noPublicWishlist}</p>
+                        ) : (
+                          miLugWishlistVisibleItems.map((item) => (
+                            <button
+                              key={`wish-${item.id}`}
+                              type="button"
+                              onClick={() => setSelectedMiLugPoolItem({ type: "wishlist", item })}
+                              className="rounded-md border border-slate-300 bg-white p-2 text-center"
+                            >
+                              <div
+                                className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
+                                  item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
+                                }`}
+                              >
+                                {item.part_img_url ? (
+                                  <Image
+                                    src={item.part_img_url}
+                                    alt={item.part_name}
+                                    width={56}
+                                    height={56}
+                                    unoptimized
+                                    className="h-[56px] w-[56px] object-contain"
+                                  />
+                                ) : null}
+                                {!item.imgmatchcolor ? (
+                                  <span className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center" title="El color de esta pieza no es el mostrado en la imagen">
+                                    <Image
+                                      src="/api/avatar/Exclamacion.svg"
+                                      alt="Advertencia"
+                                      width={16}
+                                      height={16}
+                                      unoptimized
+                                      className="h-4 w-4 object-contain"
+                                    />
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
+                              <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
+                              <p className="font-boogaloo text-xl leading-none text-slate-900">{item.remaining_quantity}</p>
+                              {item.current_user_offer_quantity > 0 ? <p className="text-[10px] font-semibold text-emerald-700">{`Yo ofrecí ${item.current_user_offer_quantity}`}</p> : null}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showMiLugSalesPoolPanel ? (
+                <div className="fixed inset-0 z-[56] flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowMiLugSalesPoolPanel(false)}>
+                  <div className="w-full max-w-[980px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-boogaloo text-xl text-slate-900">{labels.poolSales}</p>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={miLugSaleSort}
+                          onChange={(event) => {
+                            setMiLugSaleSort(event.target.value as "codigo" | "color" | "usuario" | "price_asc" | "price_desc");
+                            setMiLugSalePage(1);
+                          }}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
+                        >
+                          <option value="codigo">{labels.sortCode}</option>
+                          <option value="color">{labels.sortColor}</option>
+                          <option value="usuario">{labels.sortUser}</option>
+                          <option value="price_asc">{labels.sortPriceAsc}</option>
+                          <option value="price_desc">{labels.sortPriceDesc}</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setMiLugSalePage((prev) => Math.max(1, prev - 1))}
+                          disabled={miLugSaleCurrentPage <= 1}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                        >
+                          ←
+                        </button>
+                        <p className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700">{`${miLugSaleCurrentPage} / ${miLugSaleMaxPage}`}</p>
+                        <button
+                          type="button"
+                          onClick={() => setMiLugSalePage((prev) => Math.min(miLugSaleMaxPage, prev + 1))}
+                          disabled={miLugSaleCurrentPage >= miLugSaleMaxPage}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                        >
+                          →
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowMiLugSalesPoolPanel(false)}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700"
+                        >
+                          {labels.close}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 max-h-[520px] overflow-auto">
+                      <div className="grid grid-cols-6 gap-2">
+                        {miLugPoolSaleItems.length === 0 ? (
+                          <p className="col-span-6 text-sm text-slate-500">{labels.noPublicSales}</p>
+                        ) : (
+                          miLugSaleVisibleItems.map((item) => (
+                            <button
+                              key={`sale-${item.id}`}
+                              type="button"
+                              onClick={() => setSelectedMiLugPoolItem({ type: "venta", item })}
+                              className="rounded-md border border-slate-300 bg-white p-2 text-center"
+                            >
+                              <p className="mb-1 font-boogaloo text-xl leading-none text-emerald-700">{item.value == null ? "$-" : `$${item.value}`}</p>
+                              <div
+                                className={`relative mx-auto flex h-[62px] w-[62px] items-center justify-center overflow-hidden rounded bg-slate-50 ${
+                                  item.imgmatchcolor ? "border border-slate-200" : "border-2 border-red-500"
+                                }`}
+                              >
+                                {item.part_img_url ? (
+                                  <Image
+                                    src={item.part_img_url}
+                                    alt={item.part_name}
+                                    width={56}
+                                    height={56}
+                                    unoptimized
+                                    className="h-[56px] w-[56px] object-contain"
+                                  />
+                                ) : null}
+                                {!item.imgmatchcolor ? (
+                                  <span className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center" title="El color de esta pieza no es el mostrado en la imagen">
+                                    <Image
+                                      src="/api/avatar/Exclamacion.svg"
+                                      alt="Advertencia"
+                                      width={16}
+                                      height={16}
+                                      unoptimized
+                                      className="h-4 w-4 object-contain"
+                                    />
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="mt-1 truncate text-[11px] font-semibold text-slate-800">{item.part_num}</p>
+                              <p className="truncate text-[10px] text-slate-600">{item.publisher_name}</p>
+                              <p className="font-boogaloo text-xl leading-none text-slate-900">{item.quantity}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -9322,7 +9531,12 @@ th{background:#f3f4f6}
                       listasDeseos.map((item) => (
                         <div
                           key={item.id}
-                          onDoubleClick={() => void openListDetailPage(item)}
+                          onClick={(event) => {
+                            if ((event.target as HTMLElement).closest("button")) {
+                              return;
+                            }
+                            void openListDetailPage(item);
+                          }}
                           className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 px-3 py-2"
                           style={item.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? { backgroundColor: "#f3f4f6" } : undefined}
                         >
@@ -9394,7 +9608,12 @@ th{background:#f3f4f6}
                       listasVenta.map((item) => (
                         <div
                           key={item.id}
-                          onDoubleClick={() => void openListDetailPage(item)}
+                          onClick={(event) => {
+                            if ((event.target as HTMLElement).closest("button")) {
+                              return;
+                            }
+                            void openListDetailPage(item);
+                          }}
                           className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 px-3 py-2"
                         >
                           <Image
@@ -9783,8 +10002,7 @@ th{background:#f3f4f6}
                 <label className="mt-3 block text-sm text-slate-700">{labels.lug}</label>
                 <button
                   type="button"
-                  onClick={() => void openSettingsLugPanel()}
-                  onDoubleClick={() => {
+                  onClick={() => {
                     if (settingsLugId) {
                       void openLugInfoPanel(settingsLugId);
                     }
@@ -9843,8 +10061,7 @@ th{background:#f3f4f6}
                             <button
                               key={faceNum}
                               type="button"
-                              onClick={() => setPreviewFace(faceNum)}
-                              onDoubleClick={() => {
+                              onClick={() => {
                                 setSelectedFace(faceNum);
                                 setPreviewFace(faceNum);
                                 setShowFacePicker(false);
@@ -10169,7 +10386,7 @@ th{background:#f3f4f6}
               <div className="grid w-full grid-cols-1 content-start gap-3 self-start min-[800px]:col-span-2">
                 <button
                   type="button"
-                  onDoubleClick={() => void openUserSettings({ mode: "page", navigate: true })}
+                  onClick={() => void openUserSettings({ mode: "page", navigate: true })}
                   className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                   title="Configuración personal"
                 >
@@ -10181,7 +10398,7 @@ th{background:#f3f4f6}
                 {showDashboardBalanceRow ? (
                   <button
                     type="button"
-                    onDoubleClick={() => setStatus("Balance de usuario disponible próximamente.")}
+                    onClick={() => setStatus("Balance de usuario disponible próximamente.")}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                     title="Balance de usuario"
                   >
@@ -10191,10 +10408,21 @@ th{background:#f3f4f6}
                   </button>
                 ) : null}
 
+                <button
+                  type="button"
+                  onClick={() => router.push("/chats")}
+                  className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
+                  title="Mensajes"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-slate-900">Mensajes</p>
+                  </div>
+                </button>
+
                 {showDashboardListasRow ? (
                   <button
                     type="button"
-                    onDoubleClick={() => {
+                    onClick={() => {
                       void openListasSection();
                     }}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
@@ -10210,7 +10438,7 @@ th{background:#f3f4f6}
                 {showDashboardSetsRow ? (
                   <button
                     type="button"
-                    onDoubleClick={() => setStatus("Sets disponible próximamente.")}
+                    onClick={() => setStatus("Sets disponible próximamente.")}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                     title="Sets"
                   >
@@ -10224,7 +10452,7 @@ th{background:#f3f4f6}
                 {showDashboardMinifigRow ? (
                   <button
                     type="button"
-                    onDoubleClick={() => {
+                    onClick={() => {
                       void openMinifigurasSection();
                     }}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
@@ -10428,8 +10656,7 @@ th{background:#f3f4f6}
                           <button
                             key={faceNum}
                             type="button"
-                            onClick={() => setPreviewFace(faceNum)}
-                            onDoubleClick={() => {
+                            onClick={() => {
                               setSelectedFace(faceNum);
                               setPreviewFace(faceNum);
                               setShowFacePicker(false);
