@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Lottie from "lottie-react";
@@ -336,6 +336,26 @@ type CategoryQuickFilter = "all" | "popular" | "minifig" | "technic" | "otros";
 
 type RolLug = "admin" | "common" | null;
 
+function getSectionFromPath(pathname: string): AppSection | null {
+  const clean = String(pathname || "").trim().toLowerCase();
+  if (clean === "/" || clean === "/dashboard") {
+    return "dashboard";
+  }
+  if (clean === "/listas") {
+    return "listas";
+  }
+  if (clean === "/mi-lug") {
+    return "mi_lug";
+  }
+  if (clean === "/minifiguras") {
+    return "minifiguras";
+  }
+  if (clean === "/configuracion-personal") {
+    return "configuracion_personal";
+  }
+  return null;
+}
+
 const FACE_TOTAL = 20;
 const AUTO_MINIFIG_MISSING_LIST_NAME = "Faltantes de CMF";
 const DEFAULT_LOADING_PHRASES = [
@@ -345,6 +365,7 @@ const DEFAULT_LOADING_PHRASES = [
   "Armando minifiguras",
   "Pegando stickers en un quesito",
 ];
+const SECTION_DATA_CACHE_MS = 45_000;
 
 type HomeProps = {
   initialSection?: AppSection;
@@ -522,6 +543,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
     return "dashboard";
   });
+  const navigateSectionClient = useCallback((section: AppSection, path: string) => {
+    startTransition(() => {
+      setActiveSection(section);
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+  }, []);
   const [minifigSeriesRows, setMinifigSeriesRows] = useState<CollectibleSeriesItem[]>([]);
   const [minifigSeriesLoading, setMinifigSeriesLoading] = useState(false);
   const [minifigSeriesCheckedById, setMinifigSeriesCheckedById] = useState<Record<number, boolean>>({});
@@ -564,6 +596,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [listItemsRows, setListItemsRows] = useState<ListPartItem[]>([]);
   const [listItemsPage, setListItemsPage] = useState(1);
   const [partsCategories, setPartsCategories] = useState<PartCategoryItem[]>([]);
+  const listasLastLoadedAtRef = useRef(0);
+  const partCategoriesLastLoadedAtRef = useRef(0);
+  const minifigSeriesLastLoadedAtRef = useRef(0);
   const [partsSearchQuery, setPartsSearchQuery] = useState("");
   const [partsSearchResults, setPartsSearchResults] = useState<PartCatalogItem[]>([]);
   const [partsSearchLoading, setPartsSearchLoading] = useState(false);
@@ -1648,6 +1683,24 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     miLugPoolsLoading;
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const onPopState = () => {
+      const section = getSectionFromPath(window.location.pathname);
+      if (section) {
+        setActiveSection(section);
+      }
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!showColorDropdown && !showPartSearchDropdown) {
       return;
     }
@@ -2236,6 +2289,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     setListasItems(parsed);
     setDashboardListsCreatedCount(parsed.length);
+    listasLastLoadedAtRef.current = Date.now();
     setListasLoading(false);
   }, [supabase, t.errorPrefix, userId]);
 
@@ -2358,15 +2412,29 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         part_count: Number(row.part_count ?? 0),
       })),
     );
+    partCategoriesLastLoadedAtRef.current = Date.now();
   }, [supabase, t.errorPrefix]);
 
   const openListasSection = useCallback(async (options?: { navigate?: boolean }) => {
     if (options?.navigate !== false) {
-      router.push("/listas");
+      navigateSectionClient("listas", "/listas");
+    } else {
+      setActiveSection("listas");
     }
-    setActiveSection("listas");
-    await Promise.all([loadListasFromDb(), loadPartsCategories()]);
-  }, [loadListasFromDb, loadPartsCategories, router]);
+    const now = Date.now();
+    const shouldRefreshLists = listasItems.length === 0 || now - listasLastLoadedAtRef.current > SECTION_DATA_CACHE_MS;
+    const shouldRefreshCategories = partsCategories.length === 0 || now - partCategoriesLastLoadedAtRef.current > SECTION_DATA_CACHE_MS;
+    const tasks: Promise<void>[] = [];
+    if (shouldRefreshLists) {
+      tasks.push(loadListasFromDb());
+    }
+    if (shouldRefreshCategories) {
+      tasks.push(loadPartsCategories());
+    }
+    if (tasks.length > 0) {
+      await Promise.all(tasks);
+    }
+  }, [listasItems.length, loadListasFromDb, loadPartsCategories, navigateSectionClient, partsCategories.length]);
 
   const loadMinifigMissingAnalysisBySetNums = useCallback(
     async (setNums: string[]): Promise<MinifigMissingAnalysisResult> => {
@@ -2628,6 +2696,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         }
       }
 
+      minifigSeriesLastLoadedAtRef.current = Date.now();
       setMinifigSeriesLoading(false);
     } catch (error) {
       setStatus(`${t.errorPrefix}: ${(error as Error).message}`);
@@ -3472,11 +3541,15 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
   const openMinifigurasSection = useCallback(async (options?: { navigate?: boolean }) => {
     if (options?.navigate !== false) {
-      router.push("/minifiguras");
+      navigateSectionClient("minifiguras", "/minifiguras");
+    } else {
+      setActiveSection("minifiguras");
     }
-    setActiveSection("minifiguras");
-    await loadCollectibleSeries();
-  }, [loadCollectibleSeries, router]);
+    const shouldRefreshSeries = minifigSeriesRows.length === 0 || Date.now() - minifigSeriesLastLoadedAtRef.current > SECTION_DATA_CACHE_MS;
+    if (shouldRefreshSeries) {
+      await loadCollectibleSeries();
+    }
+  }, [loadCollectibleSeries, minifigSeriesRows.length, navigateSectionClient]);
 
   const loadListItems = useCallback(
     async (listId: string) => {
@@ -6029,8 +6102,7 @@ th{background:#f3f4f6}
     const shouldNavigate = options?.navigate ?? false;
 
     if (mode === "page" && shouldNavigate) {
-      router.push("/configuracion-personal");
-      setActiveSection("configuracion_personal");
+      navigateSectionClient("configuracion_personal", "/configuracion-personal");
     }
 
     await ensureProfile(userId, userEmail);
@@ -8224,12 +8296,11 @@ th{background:#f3f4f6}
               <header>
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">Balance de usuario</h2>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
-                    }}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigateSectionClient("dashboard", "/dashboard");
+                      }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
                     {labels.back}
@@ -8282,8 +8353,7 @@ th{background:#f3f4f6}
                   <button
                     type="button"
                     onClick={() => {
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
+                      navigateSectionClient("dashboard", "/dashboard");
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
@@ -8989,8 +9059,7 @@ th{background:#f3f4f6}
                   <button
                     type="button"
                     onClick={() => {
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
+                      navigateSectionClient("dashboard", "/dashboard");
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
@@ -9671,8 +9740,7 @@ th{background:#f3f4f6}
                   <button
                     type="button"
                     onClick={() => {
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
+                      navigateSectionClient("dashboard", "/dashboard");
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
@@ -10095,8 +10163,7 @@ th{background:#f3f4f6}
                   <button
                     type="button"
                     onClick={() => {
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
+                      navigateSectionClient("dashboard", "/dashboard");
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
                   >
@@ -10274,8 +10341,7 @@ th{background:#f3f4f6}
                       setShowPasswordFields(false);
                       setSettingsPasswordInput("");
                       setSettingsPasswordConfirmInput("");
-                      router.push("/dashboard");
-                      setActiveSection("dashboard");
+                      navigateSectionClient("dashboard", "/dashboard");
                     }}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm"
                   >
@@ -10677,8 +10743,7 @@ th{background:#f3f4f6}
                 <button
                   type="button"
                   onClick={() => {
-                    router.push("/mi-lug");
-                    setActiveSection("mi_lug");
+                    navigateSectionClient("mi_lug", "/mi-lug");
                   }}
                   className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
                   style={{ borderColor: currentLugColor2 || "#ffffff" }}
