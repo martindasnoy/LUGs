@@ -40,10 +40,82 @@ function normalizeDimensionText(value: string) {
 }
 
 function extractSearchTokens(raw: string) {
+  const stopwords = new Set(["with", "and", "con", "y", "de", "the", "a", "an", "w"]);
   return normalizeDimensionText(raw)
     .split(" ")
     .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+    .filter((token) => token.length > 0 && !stopwords.has(token));
+}
+
+function choosePrimaryToken(tokens: string[], normalized: string) {
+  if (tokens.length === 0) {
+    return normalized;
+  }
+
+  const ranked = [...tokens].sort((a, b) => {
+    const aHasDigit = /\d/.test(a);
+    const bHasDigit = /\d/.test(b);
+    if (aHasDigit !== bHasDigit) {
+      return aHasDigit ? -1 : 1;
+    }
+    if (a.length !== b.length) {
+      return b.length - a.length;
+    }
+    return a.localeCompare(b);
+  });
+
+  return ranked[0] || normalized;
+}
+
+function buildSearchCandidates(tokens: string[], normalized: string) {
+  const genericShapeTokens = new Set([
+    "tile",
+    "plate",
+    "brick",
+    "slope",
+    "round",
+    "modified",
+    "w",
+    "with",
+  ]);
+  const primary = choosePrimaryToken(tokens, normalized);
+  const candidates: string[] = [];
+  const push = (value: string) => {
+    const clean = String(value)
+      .trim()
+      .replace(/,/g, " ")
+      .replace(/\s+/g, " ");
+    if (!clean) {
+      return;
+    }
+    if (!candidates.includes(clean)) {
+      candidates.push(clean);
+    }
+  };
+
+  push(primary);
+  tokens.forEach((token) => {
+    if (!genericShapeTokens.has(token)) {
+      push(token);
+    }
+  });
+
+  for (const token of tokens) {
+    if (/^\d+x\d+$/.test(token)) {
+      const expanded = token.replace("x", " x ");
+      push(expanded);
+    }
+  }
+
+  if (candidates.length === 0) {
+    tokens.forEach((token) => push(token));
+  }
+
+  if (candidates.length === 0) {
+    push(normalized);
+  }
+
+  return candidates.slice(0, 6);
 }
 
 function tokenMatchesSearchText(searchText: string, token: string) {
@@ -143,38 +215,54 @@ async function searchWithSupabase(query: string, strict: boolean, accessToken?: 
 
   const normalized = normalizeDimensionText(query.startsWith("#") ? query.slice(1).trim() : query.trim());
   const tokens = extractSearchTokens(normalized);
-  const primary = tokens.sort((a, b) => b.length - a.length)[0] || normalized;
-  if (!primary) {
+  const candidates = buildSearchCandidates(tokens, normalized);
+  if (candidates.length === 0) {
     return [];
   }
 
-  let dbQuery = supabase
-    .from("parts_catalog")
-    .select("part_num, name, part_img_url, part_cat_id")
-    .or(`search_text.ilike.%${primary}%,part_num.ilike.${primary}%`)
-    .order("name", { ascending: true })
-    .range(0, 1999);
+  const merged = new Map<string, SearchResultItem>();
+  const desiredPoolSize = strict ? 1200 : 2000;
 
-  if (strict) {
-    dbQuery = dbQuery
-      .not("name", "ilike", "%modulex%")
-      .not("name", "ilike", "%duplo%")
-      .not("name", "ilike", "%print%")
-      .not("name", "ilike", "%printed%")
-      .not("name", "imatch", ".*\\mno\\.\\s*\\d+.*")
-      .not("part_num", "ilike", "%pb%")
-      .not("part_num", "ilike", "%pr%")
-      .not("part_num", "ilike", "%pat%");
+  for (const token of candidates) {
+    let dbQuery = supabase
+      .from("parts_catalog")
+      .select("part_num, name, part_img_url, part_cat_id")
+      .or(`search_text.ilike.%${token}%,part_num.ilike.${token}%`)
+      .order("name", { ascending: true })
+      .range(0, 1999);
+
+    if (strict) {
+      dbQuery = dbQuery
+        .not("name", "ilike", "%modulex%")
+        .not("name", "ilike", "%duplo%")
+        .not("name", "ilike", "%print%")
+        .not("name", "ilike", "%printed%")
+        .not("name", "imatch", ".*\\mno\\.\\s*\\d+.*")
+        .not("part_num", "ilike", "%pb%")
+        .not("part_num", "ilike", "%pr%")
+        .not("part_num", "ilike", "%pat%");
+    }
+
+    const { data } = await dbQuery;
+    for (const row of data ?? []) {
+      const partNum = String(row.part_num ?? "");
+      if (!partNum || merged.has(partNum)) {
+        continue;
+      }
+      merged.set(partNum, {
+        part_num: partNum,
+        name: String(row.name ?? ""),
+        part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+        category_id: row.part_cat_id ? Number(row.part_cat_id) : null,
+      });
+    }
+
+    if (merged.size >= desiredPoolSize) {
+      break;
+    }
   }
 
-  const { data } = await dbQuery;
-
-  return (data ?? []).map((row) => ({
-    part_num: String(row.part_num ?? ""),
-    name: String(row.name ?? ""),
-    part_img_url: row.part_img_url ? String(row.part_img_url) : null,
-    category_id: row.part_cat_id ? Number(row.part_cat_id) : null,
-  }));
+  return Array.from(merged.values());
 }
 
 export async function GET(request: NextRequest) {

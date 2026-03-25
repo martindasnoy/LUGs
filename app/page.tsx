@@ -1747,19 +1747,50 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const timeoutId = window.setTimeout(async () => {
       setPartsSearchLoading(true);
       try {
-        const params = new URLSearchParams({ q: normalized, limit: "20" });
         const authHeaders = await getSupabaseAuthHeaders();
-        const response = await fetch(`/api/parts/search?${params.toString()}`, {
+
+        const strictParams = new URLSearchParams({ q: normalized, limit: "10" });
+        const strictResponse = await fetch(`/api/parts/search?${strictParams.toString()}`, {
           headers: authHeaders,
         });
-        const json = (await response.json()) as { results?: PartCatalogItem[] };
+        const strictJson = (await strictResponse.json()) as { results?: PartCatalogItem[] };
         if (cancelled) {
           return;
         }
 
-        const rows = Array.isArray(json.results) ? json.results : [];
-        setPartsSearchResults(rows);
-        setShowPartSearchDropdown(rows.length > 0);
+        const strictRows = Array.isArray(strictJson.results) ? strictJson.results : [];
+
+        if (strictRows.length < 10) {
+          const fallbackParams = new URLSearchParams({ q: normalized, limit: "10", strict: "0" });
+          const fallbackResponse = await fetch(`/api/parts/search?${fallbackParams.toString()}`, {
+            headers: authHeaders,
+          });
+          const fallbackJson = (await fallbackResponse.json()) as { results?: PartCatalogItem[] };
+          if (cancelled) {
+            return;
+          }
+
+          const fallbackRows = Array.isArray(fallbackJson.results) ? fallbackJson.results : [];
+          const seen = new Set(strictRows.map((row) => row.part_num));
+          const extraRows: PartCatalogItem[] = [];
+          for (const row of fallbackRows) {
+            if (seen.has(row.part_num)) {
+              continue;
+            }
+            seen.add(row.part_num);
+            extraRows.push(row);
+            if (extraRows.length >= 10) {
+              break;
+            }
+          }
+
+          const mergedRows = [...strictRows, ...extraRows];
+          setPartsSearchResults(mergedRows);
+          setShowPartSearchDropdown(mergedRows.length > 0);
+        } else {
+          setPartsSearchResults(strictRows);
+          setShowPartSearchDropdown(strictRows.length > 0);
+        }
       } catch {
         if (!cancelled) {
           setPartsSearchResults([]);
