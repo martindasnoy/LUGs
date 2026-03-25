@@ -637,6 +637,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [miLugHeaderLogo, setMiLugHeaderLogo] = useState<string | null>(null);
   const [miLugWishlistSort, setMiLugWishlistSort] = useState<"codigo" | "color" | "usuario">("codigo");
   const [miLugSaleSort, setMiLugSaleSort] = useState<"codigo" | "color" | "usuario" | "price_asc" | "price_desc">("codigo");
+  const [hideOwnPoolItems, setHideOwnPoolItems] = useState(true);
   const [miLugWishlistPage, setMiLugWishlistPage] = useState(1);
   const [miLugSalePage, setMiLugSalePage] = useState(1);
   const [miLugMembersPage, setMiLugMembersPage] = useState(1);
@@ -1418,7 +1419,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const uiColor3 = currentLugColor3 || "#111111";
   const uiColor1Text = getContrastTextColor(uiColor1);
   const currentLugDisplayName = miLugHeaderName || lugInfoData?.nombre || currentUserLug?.nombre || "Mi LUG";
-  const miLugPoolPageSize = 18;
+  const miLugPoolPageSize = 30;
   const miLugMembersPageSize = 16;
 
   const fetchProfileNamesByIds = useCallback(async (ids: string[]) => {
@@ -1598,7 +1599,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     return map;
   }, [goBrickColors]);
   const miLugWishlistSortedItems = useMemo(() => {
-    const rows = [...miLugPoolWishlistItems];
+    const rows = (hideOwnPoolItems && userId
+      ? miLugPoolWishlistItems.filter((item) => item.publisher_id !== userId)
+      : miLugPoolWishlistItems
+    ).slice();
     rows.sort((a, b) => {
       if (miLugWishlistSort === "color") {
         return String(a.color_label ?? "").localeCompare(String(b.color_label ?? ""));
@@ -1609,9 +1613,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return a.part_num.localeCompare(b.part_num);
     });
     return rows;
-  }, [miLugPoolWishlistItems, miLugWishlistSort]);
+  }, [hideOwnPoolItems, miLugPoolWishlistItems, miLugWishlistSort, userId]);
   const miLugSaleSortedItems = useMemo(() => {
-    const rows = [...miLugPoolSaleItems];
+    const rows = (hideOwnPoolItems && userId
+      ? miLugPoolSaleItems.filter((item) => item.publisher_id !== userId)
+      : miLugPoolSaleItems
+    ).slice();
     rows.sort((a, b) => {
       if (miLugSaleSort === "color") {
         return String(a.color_label ?? "").localeCompare(String(b.color_label ?? ""));
@@ -1628,7 +1635,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return a.part_num.localeCompare(b.part_num);
     });
     return rows;
-  }, [miLugPoolSaleItems, miLugSaleSort]);
+  }, [hideOwnPoolItems, miLugPoolSaleItems, miLugSaleSort, userId]);
   const miLugWishlistMaxPage = useMemo(
     () => Math.max(1, Math.ceil(miLugWishlistSortedItems.length / miLugPoolPageSize)),
     [miLugWishlistSortedItems.length],
@@ -2573,7 +2580,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     try {
       const authHeaders = await getSupabaseAuthHeaders();
-      const response = await fetch("/api/rebrickable/minifigures/themes", { cache: "no-store", headers: authHeaders });
+      const response = await fetch("/api/minifigures/themes", { cache: "no-store", headers: authHeaders });
       const payload = (await response.json()) as {
         error?: string;
         results?: Array<CollectibleSeriesItem>;
@@ -3026,7 +3033,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       try {
         const encodedSetNum = encodeURIComponent(setNum);
         const authHeaders = await getSupabaseAuthHeaders();
-        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
+        const response = await fetch(`/api/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigurePartItem>;
@@ -3104,7 +3111,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       setMinifigFiguresLoadingBySeriesId((prev) => ({ ...prev, [seriesId]: true }));
       try {
         const authHeaders = await getSupabaseAuthHeaders();
-        const response = await fetch(`/api/rebrickable/minifigures/themes/${seriesId}/figures`, { cache: "no-store", headers: authHeaders });
+        const response = await fetch(`/api/minifigures/themes/${seriesId}/figures`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigureItem>;
@@ -3277,7 +3284,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       try {
         const encodedSetNum = encodeURIComponent(figure.set_num);
         const authHeaders = await getSupabaseAuthHeaders();
-        const response = await fetch(`/api/rebrickable/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
+        const response = await fetch(`/api/minifigures/sets/${encodedSetNum}/parts`, { cache: "no-store", headers: authHeaders });
         const payload = (await response.json()) as {
           error?: string;
           results?: Array<MinifigFigurePartItem>;
@@ -8442,18 +8449,18 @@ th{background:#f3f4f6}
                     {labels.offeredToMe}
                   </button>
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowMiLugWishlistPoolPanel(true)}
-                    className="h-16 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                    className="h-12 w-40 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
                   >
                     {labels.poolWishlist}
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowMiLugSalesPoolPanel(true)}
-                    className="h-16 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                    className="h-12 w-40 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
                   >
                     {labels.poolSales}
                   </button>
@@ -8723,6 +8730,16 @@ th{background:#f3f4f6}
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-boogaloo text-xl text-slate-900">{labels.poolWishlist}</p>
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHideOwnPoolItems((prev) => !prev)}
+                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                        >
+                          <span>No mostrar mis items en el pool</span>
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm border border-slate-300 bg-white text-[11px] leading-none">
+                            {hideOwnPoolItems ? "✓" : ""}
+                          </span>
+                        </button>
                         <select
                           value={miLugWishlistSort}
                           onChange={(event) => {
@@ -8763,9 +8780,9 @@ th{background:#f3f4f6}
                     </div>
 
                     <div className="mt-3 max-h-[520px] overflow-auto">
-                      <div className="grid grid-cols-6 gap-2">
-                        {miLugPoolWishlistItems.length === 0 ? (
-                          <p className="col-span-6 text-sm text-slate-500">{labels.noPublicWishlist}</p>
+                      <div className="grid grid-cols-10 gap-2">
+                        {miLugWishlistVisibleItems.length === 0 ? (
+                          <p className="col-span-10 text-sm text-slate-500">{labels.noPublicWishlist}</p>
                         ) : (
                           miLugWishlistVisibleItems.map((item) => (
                             <button
@@ -8863,9 +8880,9 @@ th{background:#f3f4f6}
                     </div>
 
                     <div className="mt-3 max-h-[520px] overflow-auto">
-                      <div className="grid grid-cols-6 gap-2">
-                        {miLugPoolSaleItems.length === 0 ? (
-                          <p className="col-span-6 text-sm text-slate-500">{labels.noPublicSales}</p>
+                      <div className="grid grid-cols-10 gap-2">
+                        {miLugSaleVisibleItems.length === 0 ? (
+                          <p className="col-span-10 text-sm text-slate-500">{labels.noPublicSales}</p>
                         ) : (
                           miLugSaleVisibleItems.map((item) => (
                             <button
