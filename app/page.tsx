@@ -87,7 +87,7 @@ type PendingLugAccessAction = {
   lug_name: string;
 };
 
-type AppSection = "dashboard" | "listas" | "lista_detalle" | "mi_lug" | "minifiguras" | "configuracion_personal";
+type AppSection = "dashboard" | "listas" | "lista_detalle" | "mi_lug" | "minifiguras" | "configuracion_personal" | "balance_usuario";
 type ListaTipo = "deseos" | "venta";
 type ListaVisibilidad = "privado" | "publico";
 
@@ -170,6 +170,8 @@ const NO_COLOR_LABEL = "Sin color";
 function normalizeColorLabel(value: string) {
   return value
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -422,9 +424,13 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const [settingsLugId, setSettingsLugId] = useState<string | null>(null);
   const [settingsSocialPlatform, setSettingsSocialPlatform] = useState<SocialPlatform>("instagram");
   const [settingsSocialHandle, setSettingsSocialHandle] = useState("");
+  const [settingsBricksetUserHash, setSettingsBricksetUserHash] = useState("");
+  const [settingsBricksetUsername, setSettingsBricksetUsername] = useState("");
   const [showPasswordFields, setShowPasswordFields] = useState(false);
   const [settingsPasswordInput, setSettingsPasswordInput] = useState("");
   const [settingsPasswordConfirmInput, setSettingsPasswordConfirmInput] = useState("");
+  const [showDeleteUserConfirmPopup, setShowDeleteUserConfirmPopup] = useState(false);
+  const [deletingUserAccount, setDeletingUserAccount] = useState(false);
   const [selectedFace, setSelectedFace] = useState(1);
   const [showFacePicker, setShowFacePicker] = useState(false);
   const [previewFace, setPreviewFace] = useState(1);
@@ -3449,11 +3455,19 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setListItemsLoading(true);
 
-      const listItemsWithValue = await supabase
+      const listItemsWithValueAndImage = await supabase
         .from("list_items")
-        .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
+        .select("item_id, part_num, part_name, color_name, imgmatchcolor, part_img_url, quantity, value")
         .eq("list_id", listId)
         .order("created_at", { ascending: false });
+
+      const listItemsWithValue = listItemsWithValueAndImage.error
+        ? await supabase
+            .from("list_items")
+            .select("item_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
+            .eq("list_id", listId)
+            .order("created_at", { ascending: false })
+        : listItemsWithValueAndImage;
 
       const listItemsResult = listItemsWithValue.error
         ? await supabase
@@ -3480,7 +3494,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         color_name: row.color_name ? String(row.color_name) : null,
         imgmatchcolor: Boolean(row.imgmatchcolor),
         display_color_label: parseStoredColorLabel(row.color_name ? String(row.color_name) : null),
-        part_img_url: null,
+        part_img_url: row.part_img_url ? String(row.part_img_url) : null,
         quantity: Number(row.quantity ?? 1),
         value: (() => {
           if (row.value == null) {
@@ -3533,7 +3547,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         const colorRows = partNum ? (colorRowsByPartNum.get(partNum) ?? []) : [];
         let colorImageUrl: string | null = null;
 
-        if (colorLabel && item.imgmatchcolor) {
+        if (colorLabel) {
           const target = normalizeColorLabel(colorLabel);
           const exact = colorRows.find((row) => normalizeColorLabel(row.color_name) === target);
           if (exact?.part_img_url) {
@@ -3548,10 +3562,12 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         }
 
         const baseImage = partNum ? (catalogImageByPartNum.get(partNum) ?? null) : null;
+        const persistedImage = item.part_img_url;
 
         return {
           ...item,
-          part_img_url: colorImageUrl || baseImage,
+          part_img_url: persistedImage || colorImageUrl || baseImage,
+          imgmatchcolor: colorLabel ? Boolean(persistedImage || colorImageUrl) : item.imgmatchcolor,
         };
       });
 
@@ -3676,12 +3692,21 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     const listIds = publicLists.map((item) => item.list_id);
     const ownerIds = Array.from(new Set(publicLists.map((item) => item.owner_id).filter(Boolean)));
 
-    const listItemsWithValue = await supabase
+    const listItemsWithValueAndImage = await supabase
       .from("list_items")
-      .select("item_id, list_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
+      .select("item_id, list_id, part_num, part_name, color_name, imgmatchcolor, part_img_url, quantity, value")
       .in("list_id", listIds)
       .order("created_at", { ascending: false })
       .limit(500);
+
+    const listItemsWithValue = listItemsWithValueAndImage.error
+      ? await supabase
+          .from("list_items")
+          .select("item_id, list_id, part_num, part_name, color_name, imgmatchcolor, quantity, value")
+          .in("list_id", listIds)
+          .order("created_at", { ascending: false })
+          .limit(500)
+      : listItemsWithValueAndImage;
 
     const listItemsResult = listItemsWithValue.error
       ? await supabase
@@ -3797,8 +3822,9 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       }
 
       const baseImage = partImageByNum.get(partNum) ?? null;
+      const persistedImage = (row as { part_img_url?: unknown }).part_img_url ? String((row as { part_img_url?: unknown }).part_img_url) : null;
       let colorImage: string | null = null;
-      if (displayColor && imgMatchColor) {
+      if (displayColor) {
         const target = normalizeColorLabel(displayColor);
         const colorRows = colorRowsByPartNum.get(partNum) ?? [];
         const exact = colorRows.find((colorRow) => normalizeColorLabel(colorRow.color_name) === target);
@@ -3817,7 +3843,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         id: itemId,
         part_num: partNum,
         part_name: partName,
-        part_img_url: colorImage || baseImage,
+        part_img_url: persistedImage || colorImage || baseImage,
         color_label: displayColor,
         list_type: listMeta.list_type,
         publisher_id: listMeta.owner_id,
@@ -3827,7 +3853,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         current_user_offer_quantity: currentUserOfferQuantity,
         value: (row as { value?: unknown }).value == null ? null : Number((row as { value?: unknown }).value),
         publisher_name: publisherName,
-        imgmatchcolor: imgMatchColor,
+        imgmatchcolor: displayColor ? Boolean(persistedImage || colorImage) : imgMatchColor,
       };
 
       if (listMeta.list_type === "venta") {
@@ -4323,9 +4349,10 @@ th{background:#f3f4f6}
     const hasSelectedColor = Boolean(cleanColor && cleanColor !== NO_COLOR_LABEL);
     const imgMatchColor = hasSelectedColor ? Boolean(options?.imgMatchColor ?? false) : true;
     const value = options?.value == null ? null : Number(options.value);
+    let resolvedPartImageUrl = part.part_img_url || null;
 
     let finalImgMatchColor = imgMatchColor;
-    if (hasSelectedColor && !imgMatchColor) {
+    if (hasSelectedColor) {
       try {
         const params = new URLSearchParams({
           part_num: part.part_num,
@@ -4335,7 +4362,10 @@ th{background:#f3f4f6}
         const response = await fetch(`/api/rebrickable/part-color-image?${params.toString()}`);
         const payload = (await response.json()) as { image_url?: string | null };
         if (response.ok && payload.image_url) {
+          resolvedPartImageUrl = String(payload.image_url);
           finalImgMatchColor = true;
+        } else {
+          finalImgMatchColor = false;
         }
       } catch {}
     }
@@ -4348,6 +4378,7 @@ th{background:#f3f4f6}
       part_name: string;
       color_name: string | null;
       imgmatchcolor: boolean;
+      part_img_url: string | null;
       quantity: number;
       value?: number;
     } = {
@@ -4356,6 +4387,7 @@ th{background:#f3f4f6}
       part_name: part.name,
       color_name: colorName,
       imgmatchcolor: finalImgMatchColor,
+      part_img_url: resolvedPartImageUrl,
       quantity,
     };
 
@@ -5275,7 +5307,7 @@ th{background:#f3f4f6}
     if (!userId) {
       return;
     }
-    if (activeSection !== "minifiguras") {
+    if (activeSection !== "minifiguras" && activeSection !== "balance_usuario") {
       return;
     }
 
@@ -5974,7 +6006,7 @@ th{background:#f3f4f6}
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("full_name, social_platform, social_handle, avatar_key, preferred_language, current_lug_id, rol_lug")
+      .select("full_name, social_platform, social_handle, brickset_user_hash, brickset_username, avatar_key, preferred_language, current_lug_id, rol_lug")
       .eq("id", userId)
       .maybeSingle();
 
@@ -5988,6 +6020,8 @@ th{background:#f3f4f6}
     setSettingsEmailInput(userEmail ?? "");
     setSettingsSocialPlatform(String(data?.social_platform ?? "instagram") === "facebook" ? "facebook" : "instagram");
     setSettingsSocialHandle(String(data?.social_handle ?? ""));
+    setSettingsBricksetUserHash(String(data?.brickset_user_hash ?? ""));
+    setSettingsBricksetUsername(String(data?.brickset_username ?? ""));
     const preferredLanguage = String(data?.preferred_language ?? language);
     setSettingsLanguageInput(preferredLanguage === "en" ? "en" : preferredLanguage === "pt" ? "pt" : "es");
     setRolLug(String(data?.rol_lug ?? "") === "admin" ? "admin" : String(data?.rol_lug ?? "") === "common" ? "common" : null);
@@ -6048,6 +6082,8 @@ th{background:#f3f4f6}
         full_name: settingsNameInput.trim() || null,
         social_platform: settingsSocialPlatform || null,
         social_handle: settingsSocialHandle.trim() || null,
+        brickset_user_hash: settingsBricksetUserHash.trim() || null,
+        brickset_username: settingsBricksetUsername.trim() || null,
         avatar_key: avatarValue,
         preferred_language: settingsLanguageInput,
       })
@@ -6091,6 +6127,36 @@ th{background:#f3f4f6}
     setSettingsPasswordConfirmInput("");
     setSettingsSaving(false);
     setStatus(statusText.settingsSaved);
+  }
+
+  async function deleteCurrentUserAccount() {
+    if (!supabase || !userId || deletingUserAccount) {
+      return;
+    }
+
+    setDeletingUserAccount(true);
+
+    const authHeaders = await getSupabaseAuthHeaders();
+    const response = await fetch("/api/account/delete", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authHeaders ?? {}),
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      setStatus(payload.error || "No se pudo desarmar el usuario.");
+      setDeletingUserAccount(false);
+      return;
+    }
+
+    await supabase.auth.signOut();
+    setDeletingUserAccount(false);
+    setShowDeleteUserConfirmPopup(false);
+    router.push("/");
   }
 
   async function handleMasterLogoFileChange(file: File | null) {
@@ -7284,6 +7350,33 @@ th{background:#f3f4f6}
     </div>
   ) : null;
 
+  const deleteUserConfirmPopupOverlay = showDeleteUserConfirmPopup ? (
+    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-900/60 p-4" onClick={() => !deletingUserAccount && setShowDeleteUserConfirmPopup(false)}>
+      <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <p className="font-boogaloo text-2xl text-slate-900">Desarmar usuario</p>
+        <p className="mt-2 text-sm text-slate-700">Esta accion elimina tu cuenta y tus datos (listas y registros). Los mensajes de chat quedaran solo como texto.</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowDeleteUserConfirmPopup(false)}
+            disabled={deletingUserAccount}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm"
+          >
+            No
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteCurrentUserAccount()}
+            disabled={deletingUserAccount}
+            className="rounded-md border border-red-400 bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {deletingUserAccount ? "Desarmando..." : "Si"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (userEmail) {
     if (activeSection === "lista_detalle" && !selectedListForItems) {
       return (
@@ -7291,6 +7384,7 @@ th{background:#f3f4f6}
           {unreadChatsFloatingAlert}
           {unreadChatsPopupOverlay}
           {memberChatPopupOverlay}
+          {deleteUserConfirmPopupOverlay}
           <div className="flex min-h-screen flex-col items-center justify-center">
             <p className="font-cubano-title text-3xl font-semibold text-white">{labels.loadingList}</p>
             <div className="mt-6 w-full px-4 text-center">
@@ -7315,6 +7409,7 @@ th{background:#f3f4f6}
             {unreadChatsFloatingAlert}
             {unreadChatsPopupOverlay}
             {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -8086,6 +8181,49 @@ th{background:#f3f4f6}
       );
     }
 
+    if (activeSection === "balance_usuario") {
+      return (
+        <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
+          <div className="relative mx-auto w-full max-w-[800px] rounded-2xl border-[10px] p-[1px] shadow-xl" style={{ borderColor: uiColor1 }}>
+            {unreadChatsFloatingAlert}
+            {unreadChatsPopupOverlay}
+            {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
+            <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
+              <header>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-boogaloo text-3xl font-semibold text-slate-900">Balance de usuario</h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      router.push("/dashboard");
+                      setActiveSection("dashboard");
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {labels.back}
+                  </button>
+                </div>
+                <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
+                {status ? <p className="mt-2 text-sm text-slate-700">{status}</p> : null}
+              </header>
+
+              <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-4">
+                <h3 className="font-boogaloo text-2xl text-slate-900">Minifiguras</h3>
+                <div className="mt-2 text-sm leading-5 text-slate-700">
+                  <p>{`Completas: ${minifigGlobalOwnedStats.complete}`}</p>
+                  <p>{`Con Faltantes: ${minifigGlobalOwnedStats.missing}`}</p>
+                  <p>{`Piezas faltantes: ${minifigGlobalMissingPiecesCount}`}</p>
+                  <p>{`Tengo en Total: ${minifigGlobalOwnedStats.total}`}</p>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </main>
+      );
+    }
+
     if (activeSection === "mi_lug") {
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
@@ -8093,6 +8231,7 @@ th{background:#f3f4f6}
             {unreadChatsFloatingAlert}
             {unreadChatsPopupOverlay}
             {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -8802,6 +8941,7 @@ th{background:#f3f4f6}
             {unreadChatsFloatingAlert}
             {unreadChatsPopupOverlay}
             {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -9476,6 +9616,7 @@ th{background:#f3f4f6}
             {unreadChatsFloatingAlert}
             {unreadChatsPopupOverlay}
             {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -9915,6 +10056,7 @@ th{background:#f3f4f6}
             {unreadChatsFloatingAlert}
             {unreadChatsPopupOverlay}
             {memberChatPopupOverlay}
+            {deleteUserConfirmPopupOverlay}
             <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
               <header>
                 <div className="flex items-center justify-between gap-3">
@@ -10002,11 +10144,7 @@ th{background:#f3f4f6}
                 <label className="mt-3 block text-sm text-slate-700">{labels.lug}</label>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (settingsLugId) {
-                      void openLugInfoPanel(settingsLugId);
-                    }
-                  }}
+                  onClick={() => void openSettingsLugPanel()}
                   className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-left"
                 >
                   {settingsLugName}
@@ -10031,6 +10169,12 @@ th{background:#f3f4f6}
                     placeholder={labels.userPlaceholder}
                     className="rounded-lg border border-slate-300 px-3 py-2"
                   />
+                </div>
+
+                <label className="mt-3 block text-sm text-slate-700">Brickset</label>
+                <div className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-600">Conectá Brickset desde Balance de usuario.</p>
+                  <p className="mt-1 text-sm text-slate-800">{settingsBricksetUsername ? `Conectado como ${settingsBricksetUsername}` : "Sin conectar"}</p>
                 </div>
 
                 <label className="mt-3 block text-sm text-slate-700">{t.language}</label>
@@ -10085,6 +10229,13 @@ th{background:#f3f4f6}
                 ) : null}
 
                 <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteUserConfirmPopup(true)}
+                    className="mr-auto rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700"
+                  >
+                    Desarmar usuario
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -10192,46 +10343,71 @@ th{background:#f3f4f6}
                             />
                           </div>
                           <div className="grid grid-cols-3 gap-2">
-                            <input
-                              type="text"
-                              value={settingsLugColor1Input}
-                              onChange={(event) => setSettingsLugColor1Input(event.target.value)}
-                              className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
-                            />
-                            <input
-                              type="text"
-                              value={settingsLugColor2Input}
-                              onChange={(event) => setSettingsLugColor2Input(event.target.value)}
-                              className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
-                            />
-                            <input
-                              type="text"
-                              value={settingsLugColor3Input}
-                              onChange={(event) => setSettingsLugColor3Input(event.target.value)}
-                              className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
-                            />
+                            <div className="flex flex-col items-center gap-2">
+                              <input
+                                type="color"
+                                value={toColorPickerValue(settingsLugColor1Input, "#006eb2")}
+                                onChange={(event) => setSettingsLugColor1Input(event.target.value)}
+                                className="h-12 w-12 rounded-md border border-slate-300 bg-white p-1"
+                              />
+                              <input
+                                type="text"
+                                value={settingsLugColor1Input}
+                                onChange={(event) => setSettingsLugColor1Input(event.target.value)}
+                                className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
+                              />
+                            </div>
+                            <div className="flex flex-col items-center gap-2">
+                              <input
+                                type="color"
+                                value={toColorPickerValue(settingsLugColor2Input, "#ffffff")}
+                                onChange={(event) => setSettingsLugColor2Input(event.target.value)}
+                                className="h-12 w-12 rounded-md border border-slate-300 bg-white p-1"
+                              />
+                              <input
+                                type="text"
+                                value={settingsLugColor2Input}
+                                onChange={(event) => setSettingsLugColor2Input(event.target.value)}
+                                className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
+                              />
+                            </div>
+                            <div className="flex flex-col items-center gap-2">
+                              <input
+                                type="color"
+                                value={toColorPickerValue(settingsLugColor3Input, "#111111")}
+                                onChange={(event) => setSettingsLugColor3Input(event.target.value)}
+                                className="h-12 w-12 rounded-md border border-slate-300 bg-white p-1"
+                              />
+                              <input
+                                type="text"
+                                value={settingsLugColor3Input}
+                                onChange={(event) => setSettingsLugColor3Input(event.target.value)}
+                                className="w-full rounded-lg border border-slate-300 px-2 py-2 text-center text-sm"
+                              />
+                            </div>
                           </div>
                         </div>
                       ) : (
                         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                          <p className="text-lg font-semibold text-slate-900">{settingsLugNombreInput || labels.noLug}</p>
+                          <div className="mx-auto h-32 w-32 overflow-hidden rounded-md border border-slate-200 bg-white">
+                            {settingsLugLogoDataUrl ? (
+                              <Image
+                                src={settingsLugLogoDataUrl}
+                                alt={settingsLugNombreInput || settingsLugName}
+                                width={128}
+                                height={128}
+                                unoptimized
+                                className="h-full w-full object-cover"
+                              />
+                            ) : null}
+                          </div>
+                          <p className="mt-3 text-lg font-semibold text-slate-900">{settingsLugNombreInput || labels.noLug}</p>
                           <p className="text-sm text-slate-600">{settingsLugPaisInput || labels.noCountry}</p>
                           <p className="mt-3 text-sm text-slate-700">{settingsLugDescripcionInput || labels.noDescription}</p>
                         </div>
                       )}
 
                       <div className="mt-4 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (settingsLugId) {
-                              void openLugInfoPanel(settingsLugId);
-                            }
-                          }}
-                          className="rounded-md border border-slate-300 px-4 py-2 text-sm"
-                        >
-                          {labels.lugInformation}
-                        </button>
                         {rolLug === "admin" ? (
                           <button
                             type="button"
@@ -10312,6 +10488,7 @@ th{background:#f3f4f6}
           {unreadChatsFloatingAlert}
           {unreadChatsPopupOverlay}
           {memberChatPopupOverlay}
+          {deleteUserConfirmPopupOverlay}
           <div className="rounded-xl border-[5px] bg-white p-4 sm:p-8" style={{ borderColor: currentLugColor2 || "#ffffff", backgroundColor: "#ffffff" }}>
           <header className="pb-5">
             <div className="flex items-start justify-between gap-3">
@@ -10398,7 +10575,7 @@ th{background:#f3f4f6}
                 {showDashboardBalanceRow ? (
                   <button
                     type="button"
-                    onClick={() => setStatus("Balance de usuario disponible próximamente.")}
+                    onClick={() => setActiveSection("balance_usuario")}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                     title="Balance de usuario"
                   >
@@ -10628,6 +10805,12 @@ th{background:#f3f4f6}
                 />
               </div>
 
+              <label className="mt-3 block text-sm text-slate-700">Brickset</label>
+              <div className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-3">
+                <p className="text-xs text-slate-600">Conectá Brickset desde Balance de usuario.</p>
+                <p className="mt-1 text-sm text-slate-800">{settingsBricksetUsername ? `Conectado como ${settingsBricksetUsername}` : "Sin conectar"}</p>
+              </div>
+
               <label className="mt-3 block text-sm text-slate-700">{t.language}</label>
               <select
                 value={settingsLanguageInput}
@@ -10680,6 +10863,13 @@ th{background:#f3f4f6}
               ) : null}
 
               <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteUserConfirmPopup(true)}
+                  className="mr-auto rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700"
+                >
+                  Desarmar usuario
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -10909,7 +11099,7 @@ th{background:#f3f4f6}
 
         {showMasterPanel ? (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowMasterPanel(false)}>
-            <div className="w-full max-w-[700px] rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="w-full max-w-[700px] max-h-[700px] overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-xl text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
                   {labels.masterPanel}
@@ -10997,63 +11187,66 @@ th{background:#f3f4f6}
                 </div>
               </div>
 
-              <div className="mt-4 rounded-lg border border-slate-200 p-4">
-                <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
-                  {labels.maintenanceSection}
-                </h4>
-                <div className="mt-3 flex flex-wrap items-center justify-start gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoadingPhrasesDraft([...loadingPhrases]);
-                      setShowLoadingPhrasesPanel(true);
-                    }}
-                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
-                  >
-                    {labels.loadingPhrasesTitle}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (maintenanceEnabled) {
-                        void disableMaintenanceMode();
-                      } else {
-                        openMaintenancePanel();
-                      }
-                    }}
-                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
-                  >
-                    {maintenanceEnabled ? labels.disableMaintenance : labels.maintenanceLockTitle}
-                  </button>
-                </div>
-
-                <div className="mt-3">
-                  <label className="block text-sm text-slate-700">{labels.footerLegendLabel}</label>
-                  <div className="mt-1 flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={maintenanceDraftFooterLegend}
-                      onChange={(event) => setMaintenanceDraftFooterLegend(event.target.value)}
-                      placeholder={labels.footerLegendPlaceholder}
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    />
+              <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                    {labels.maintenanceSection}
+                  </h4>
+                  <div className="mt-3 flex flex-wrap items-center justify-start gap-2">
                     <button
                       type="button"
-                      onClick={() => void saveFooterLegendInMaster()}
-                      className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                      onClick={() => {
+                        setLoadingPhrasesDraft([...loadingPhrases]);
+                        setShowLoadingPhrasesPanel(true);
+                      }}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
                     >
-                      {labels.footerLegendSave}
+                      {labels.loadingPhrasesTitle}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (maintenanceEnabled) {
+                          void disableMaintenanceMode();
+                        } else {
+                          openMaintenancePanel();
+                        }
+                      }}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+                    >
+                      {maintenanceEnabled ? labels.disableMaintenance : labels.maintenanceLockTitle}
                     </button>
                   </div>
+
+                  <div className="mt-3">
+                    <label className="block text-sm text-slate-700">{labels.footerLegendLabel}</label>
+                    <div className="mt-1">
+                      <input
+                        type="text"
+                        value={maintenanceDraftFooterLegend}
+                        onChange={(event) => setMaintenanceDraftFooterLegend(event.target.value)}
+                        placeholder={labels.footerLegendPlaceholder}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => void saveFooterLegendInMaster()}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                      >
+                        {labels.footerLegendSave}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              <div className="mt-4 rounded-lg border border-slate-200 p-4">
-                <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
-                  Secciones
-                </h4>
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <h4 className="text-sm font-semibold text-slate-900" style={{ fontFamily: "var(--font-chewy), cursive" }}>
+                    Secciones
+                  </h4>
 
-                <div className="mt-3 space-y-2">
+                  <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
                     <span className="text-sm text-slate-800">Balance</span>
                     <button
@@ -11134,6 +11327,7 @@ th{background:#f3f4f6}
                     </button>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           </div>

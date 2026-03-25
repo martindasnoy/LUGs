@@ -34,6 +34,12 @@ type LugMemberItem = {
 };
 
 const PAGE_SIZE = 40;
+const MAX_CHAT_MESSAGE_LENGTH = 2000;
+const CHAT_EMOJIS = [
+  "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎", "🤔", "🙌", "👏", "👍", "👎", "🙏", "🎉", "🔥",
+  "💯", "❤️", "💙", "💚", "🧡", "💜", "🤝", "👀", "😅", "😢", "😡", "🤯", "😴", "🤗", "😬", "🫶",
+  "🎁", "🎈", "⭐", "✨", "🚀", "💡", "📌", "✅", "❌", "⚠️", "📣", "🎵", "⚽", "🏀", "🧩", "🧱",
+];
 
 function getContrastTextColor(hexColor: string) {
   const clean = String(hexColor || "").replace("#", "").trim();
@@ -111,7 +117,9 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
   const [nameById, setNameById] = useState<Record<string, string>>({});
   const [avatarById, setAvatarById] = useState<Record<string, string>>({});
   const [lugColor1, setLugColor1] = useState("#009fe3");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const emojiPickerRef = useRef<HTMLDivElement | null>(null);
 
   const getSupabaseAuthHeaders = useCallback(async () => {
     if (!supabase) {
@@ -473,6 +481,30 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
   }, [markRoomAsRead, messages, selectedRoomId]);
 
   useEffect(() => {
+    if (!showEmojiPicker) {
+      return;
+    }
+
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+      if (emojiPickerRef.current?.contains(target)) {
+        return;
+      }
+      setShowEmojiPicker(false);
+    };
+
+    window.addEventListener("mousedown", handleOutside);
+    window.addEventListener("touchstart", handleOutside);
+    return () => {
+      window.removeEventListener("mousedown", handleOutside);
+      window.removeEventListener("touchstart", handleOutside);
+    };
+  }, [showEmojiPicker]);
+
+  useEffect(() => {
     if (!supabase || !selectedRoomId || !userId) {
       return;
     }
@@ -554,6 +586,11 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
   const sendMessage = useCallback(async () => {
     const text = composerText.trim();
     if (!supabase || !selectedRoomId || !userId || !text || sending) {
+      return;
+    }
+
+    if (text.length > MAX_CHAT_MESSAGE_LENGTH) {
+      setStatus(`El mensaje supera el maximo de ${MAX_CHAT_MESSAGE_LENGTH} caracteres.`);
       return;
     }
 
@@ -713,9 +750,35 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
 
                 <footer className="border-t border-slate-200 bg-white p-3">
                   <div className="flex items-end gap-2">
+                    <div ref={emojiPickerRef} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowEmojiPicker((prev) => !prev)}
+                        className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-md border border-slate-300 bg-slate-50 text-xl"
+                        title="Emojis"
+                      >
+                        😊
+                      </button>
+                      {showEmojiPicker ? (
+                        <div className="absolute bottom-full left-0 z-30 mb-2 w-[260px] rounded-md border border-slate-300 bg-white p-2 shadow-lg">
+                          <div className="grid max-h-[180px] grid-cols-8 gap-1 overflow-y-auto pr-1">
+                            {CHAT_EMOJIS.map((emoji) => (
+                              <button
+                                key={`picker-${emoji}`}
+                                type="button"
+                                onClick={() => setComposerText((prev) => `${prev}${emoji}`)}
+                                className="rounded border border-slate-200 bg-slate-50 px-1 py-1 text-base hover:bg-slate-100"
+                              >
+                                {emoji}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                     <textarea
                       value={composerText}
-                      onChange={(event) => setComposerText(event.target.value)}
+                      onChange={(event) => setComposerText(event.target.value.slice(0, MAX_CHAT_MESSAGE_LENGTH))}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault();
@@ -723,6 +786,7 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
                         }
                       }}
                       placeholder="Escribe un mensaje..."
+                      maxLength={MAX_CHAT_MESSAGE_LENGTH}
                       className="max-h-28 min-h-[42px] flex-1 resize-y rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900"
                     />
                     <button
@@ -734,6 +798,7 @@ export default function ChatsClient({ initialRoomId }: { initialRoomId?: string 
                       Enviar
                     </button>
                   </div>
+                  <p className="mt-1 text-right text-[11px] text-slate-500">{composerText.length}/{MAX_CHAT_MESSAGE_LENGTH}</p>
                 </footer>
               </div>
             )}

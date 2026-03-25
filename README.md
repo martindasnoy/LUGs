@@ -17,6 +17,7 @@ Required values:
 - `SUPABASE_SERVICE_ROLE_KEY` (solo scripts/server, nunca en frontend)
 - `REBRICKABLE_API_KEY` (server-side only, never expose as `NEXT_PUBLIC_*`)
 - `REBRICKABLE_API_BASE_URL` (default: `https://rebrickable.com/api/v3`)
+- `BRICKSET_API_KEY` (server-side only, used by `/api/brickset/connect` and `/api/brickset/summary`)
 
 Optional (for Meilisearch-backed part search):
 
