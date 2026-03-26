@@ -1369,7 +1369,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     if (language === "pt") return "/Idioma_PT.svg";
     return "/Idioma_ES.svg";
   }, [language]);
-  const mustSelectLugOnDashboard = Boolean(userId && activeSection === "dashboard" && !currentLugId);
+  const mustSelectLugOnDashboard = Boolean(userId && activeSection === "dashboard" && !currentLugId && requestedLugIds.length === 0);
   const otherLugs = useMemo(
     () => masterLugs.filter((lug) => lug.lug_id !== currentLugId),
     [masterLugs, currentLugId],
@@ -5368,6 +5368,21 @@ th{background:#f3f4f6}
 
     return () => subscription.unsubscribe();
   }, [loadMaintenanceSettings, loadUserState, router, startBootLoading, supabase]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    if (activeSection !== "mi_lug") {
+      return;
+    }
+    if (currentLugId) {
+      return;
+    }
+
+    setStatus(labels.mustJoinOrCreateLug);
+    navigateSectionClient("dashboard", "/dashboard");
+  }, [activeSection, currentLugId, labels.mustJoinOrCreateLug, navigateSectionClient, userId]);
 
   useEffect(() => {
     if (!userId) {
@@ -10852,6 +10867,14 @@ th{background:#f3f4f6}
                 <button
                   type="button"
                   onClick={() => {
+                    if (!currentLugId) {
+                      setShowLugsPanel(true);
+                      void loadMasterLugs();
+                      if (userId) {
+                        void loadMyJoinRequests(userId);
+                      }
+                      return;
+                    }
                     navigateSectionClient("mi_lug", "/mi-lug");
                   }}
                   className="flex aspect-[5/3] w-full items-center justify-center rounded-lg border-2 bg-white text-center text-xs font-semibold text-slate-700"
