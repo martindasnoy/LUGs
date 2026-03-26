@@ -26,7 +26,7 @@ const cubano = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "LUGs App",
+  title: "LUGs app",
   description: "Comunidad para LUGs y AFOLs",
 };
 

@@ -6064,6 +6064,48 @@ th{background:#f3f4f6}
     setLoading(false);
   }
 
+  async function handleResendConfirmationEmail() {
+    setStatus("");
+
+    if (authCooldownRemaining > 0) {
+      setStatus(`Espera ${authCooldownRemaining}s antes de volver a intentar.`);
+      return;
+    }
+
+    const targetEmail = email.trim();
+    if (!targetEmail) {
+      setStatus(t.resendConfirmationEmailRequired);
+      return;
+    }
+
+    if (!supabase) {
+      setStatus(t.missingEnv);
+      return;
+    }
+
+    setLoading(true);
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined;
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: targetEmail,
+      options: redirectTo ? { emailRedirectTo: redirectTo } : undefined,
+    });
+
+    if (error) {
+      const retrySeconds = getAuthRetryDelaySeconds(error.message);
+      if (retrySeconds > 0) {
+        setAuthCooldownUntil(Date.now() + retrySeconds * 1000);
+        setAuthNowMs(Date.now());
+      }
+      setStatus(getAuthErrorStatus(error.message));
+    } else {
+      setAuthCooldownUntil(0);
+      setStatus(t.resendConfirmationSent);
+    }
+
+    setLoading(false);
+  }
+
   async function handleLogout() {
     if (!supabase) {
       return;
@@ -12348,6 +12390,14 @@ th{background:#f3f4f6}
             className="w-full rounded-lg bg-black px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
           >
             {loading ? t.processing : authCooldownRemaining > 0 ? `Espera ${authCooldownRemaining}s` : submitText}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleResendConfirmationEmail()}
+            disabled={loading || !supabase || authCooldownRemaining > 0}
+            className="w-full rounded-lg border border-black/20 bg-white px-4 py-2.5 text-sm font-medium text-black disabled:opacity-60"
+          >
+            {t.resendConfirmation}
           </button>
         </form>
 

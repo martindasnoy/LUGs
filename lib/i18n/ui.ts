@@ -17,6 +17,9 @@ type UiDictionary = {
   processing: string;
   createAccount: string;
   signIn: string;
+  resendConfirmation: string;
+  resendConfirmationSent: string;
+  resendConfirmationEmailRequired: string;
   missingEnv: string;
   accountCreated: string;
   errorPrefix: string;
@@ -36,6 +39,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     processing: "Procesando...",
     createAccount: "Crear cuenta",
     signIn: "Iniciar sesion",
+    resendConfirmation: "Reenviar mail de confirmacion",
+    resendConfirmationSent: "Te reenviamos el mail de confirmacion.",
+    resendConfirmationEmailRequired: "Ingresa tu email para reenviar la confirmacion.",
     missingEnv: "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Cuenta creada. Revisa tu email para confirmar.",
     errorPrefix: "Error",
@@ -53,6 +59,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     processing: "Processing...",
     createAccount: "Create account",
     signIn: "Sign in",
+    resendConfirmation: "Resend confirmation email",
+    resendConfirmationSent: "Confirmation email sent again.",
+    resendConfirmationEmailRequired: "Enter your email to resend confirmation.",
     missingEnv: "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Account created. Check your email to confirm.",
     errorPrefix: "Error",
@@ -70,6 +79,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     processing: "Processando...",
     createAccount: "Criar conta",
     signIn: "Entrar",
+    resendConfirmation: "Reenviar email de confirmacao",
+    resendConfirmationSent: "Email de confirmacao reenviado.",
+    resendConfirmationEmailRequired: "Digite seu email para reenviar a confirmacao.",
     missingEnv: "Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Conta criada. Verifique seu email para confirmar.",
     errorPrefix: "Erro",
