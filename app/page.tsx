@@ -6126,7 +6126,7 @@ th{background:#f3f4f6}
     }
 
     setLoading(true);
-    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined;
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined;
     const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, redirectTo ? { redirectTo } : undefined);
 
     if (error) {
