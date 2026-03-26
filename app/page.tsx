@@ -5258,6 +5258,14 @@ th{background:#f3f4f6}
       return;
     }
 
+    if (typeof window !== "undefined") {
+      const hash = String(window.location.hash || "").toLowerCase();
+      if (hash.includes("type=recovery") && !window.location.pathname.startsWith("/reset-password")) {
+        window.location.replace(`/reset-password${window.location.hash}`);
+        return;
+      }
+    }
+
     const init = async () => {
       startBootLoading(true);
       const {
@@ -5309,8 +5317,12 @@ th{background:#f3f4f6}
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       void (async () => {
+        if (event === "PASSWORD_RECOVERY") {
+          router.push("/reset-password");
+          return;
+        }
         startBootLoading();
         if (session?.user?.id) {
           await loadUserState(session.user.id, session.user.email ?? null);
