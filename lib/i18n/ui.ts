@@ -20,6 +20,9 @@ type UiDictionary = {
   resendConfirmation: string;
   resendConfirmationSent: string;
   resendConfirmationEmailRequired: string;
+  forgotPassword: string;
+  forgotPasswordSent: string;
+  forgotPasswordEmailRequired: string;
   missingEnv: string;
   accountCreated: string;
   errorPrefix: string;
@@ -42,6 +45,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     resendConfirmation: "Reenviar mail de confirmacion",
     resendConfirmationSent: "Te reenviamos el mail de confirmacion.",
     resendConfirmationEmailRequired: "Ingresa tu email para reenviar la confirmacion.",
+    forgotPassword: "Olvide mi contrasena",
+    forgotPasswordSent: "Te enviamos un mail para recuperar tu contrasena.",
+    forgotPasswordEmailRequired: "Ingresa tu email para recuperar tu contrasena.",
     missingEnv: "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Cuenta creada. Revisa tu email para confirmar.",
     errorPrefix: "Error",
@@ -62,6 +68,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     resendConfirmation: "Resend confirmation email",
     resendConfirmationSent: "Confirmation email sent again.",
     resendConfirmationEmailRequired: "Enter your email to resend confirmation.",
+    forgotPassword: "I forgot my password",
+    forgotPasswordSent: "We sent you an email to reset your password.",
+    forgotPasswordEmailRequired: "Enter your email to reset your password.",
     missingEnv: "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Account created. Check your email to confirm.",
     errorPrefix: "Error",
@@ -82,6 +91,9 @@ export const uiTranslations: Record<UiLanguage, UiDictionary> = {
     resendConfirmation: "Reenviar email de confirmacao",
     resendConfirmationSent: "Email de confirmacao reenviado.",
     resendConfirmationEmailRequired: "Digite seu email para reenviar a confirmacao.",
+    forgotPassword: "Esqueci minha senha",
+    forgotPasswordSent: "Enviamos um email para redefinir sua senha.",
+    forgotPasswordEmailRequired: "Digite seu email para redefinir sua senha.",
     missingEnv: "Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     accountCreated: "Conta criada. Verifique seu email para confirmar.",
     errorPrefix: "Erro",

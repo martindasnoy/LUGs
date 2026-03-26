@@ -6084,7 +6084,7 @@ th{background:#f3f4f6}
     }
 
     setLoading(true);
-    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined;
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined;
     const { error } = await supabase.auth.resend({
       type: "signup",
       email: targetEmail,
@@ -6101,6 +6101,44 @@ th{background:#f3f4f6}
     } else {
       setAuthCooldownUntil(0);
       setStatus(t.resendConfirmationSent);
+    }
+
+    setLoading(false);
+  }
+
+  async function handleForgotPasswordEmail() {
+    setStatus("");
+
+    if (authCooldownRemaining > 0) {
+      setStatus(`Espera ${authCooldownRemaining}s antes de volver a intentar.`);
+      return;
+    }
+
+    const targetEmail = email.trim();
+    if (!targetEmail) {
+      setStatus(t.forgotPasswordEmailRequired);
+      return;
+    }
+
+    if (!supabase) {
+      setStatus(t.missingEnv);
+      return;
+    }
+
+    setLoading(true);
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined;
+    const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, redirectTo ? { redirectTo } : undefined);
+
+    if (error) {
+      const retrySeconds = getAuthRetryDelaySeconds(error.message);
+      if (retrySeconds > 0) {
+        setAuthCooldownUntil(Date.now() + retrySeconds * 1000);
+        setAuthNowMs(Date.now());
+      }
+      setStatus(getAuthErrorStatus(error.message));
+    } else {
+      setAuthCooldownUntil(0);
+      setStatus(t.forgotPasswordSent);
     }
 
     setLoading(false);
@@ -12391,14 +12429,25 @@ th{background:#f3f4f6}
           >
             {loading ? t.processing : authCooldownRemaining > 0 ? `Espera ${authCooldownRemaining}s` : submitText}
           </button>
-          <button
-            type="button"
-            onClick={() => void handleResendConfirmationEmail()}
-            disabled={loading || !supabase || authCooldownRemaining > 0}
-            className="w-full rounded-lg border border-black/20 bg-white px-4 py-2.5 text-sm font-medium text-black disabled:opacity-60"
-          >
-            {t.resendConfirmation}
-          </button>
+          {mode === "register" ? (
+            <button
+              type="button"
+              onClick={() => void handleResendConfirmationEmail()}
+              disabled={loading || !supabase || authCooldownRemaining > 0}
+              className="w-full rounded-lg border border-black/20 bg-white px-4 py-2.5 text-sm font-medium text-black disabled:opacity-60"
+            >
+              {t.resendConfirmation}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleForgotPasswordEmail()}
+              disabled={loading || !supabase || authCooldownRemaining > 0}
+              className="w-full rounded-lg border border-black/20 bg-white px-4 py-2.5 text-sm font-medium text-black disabled:opacity-60"
+            >
+              {t.forgotPassword}
+            </button>
+          )}
         </form>
 
         {status ? <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">{status}</p> : null}
