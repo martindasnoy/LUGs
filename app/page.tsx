@@ -1773,8 +1773,17 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       return undefined;
     }
 
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
+    const sessionResult = await supabase.auth.getSession();
+    let accessToken: string | undefined = sessionResult.data.session?.access_token ?? undefined;
+    if (!accessToken) {
+      const refreshed = await supabase.auth.refreshSession();
+      accessToken = refreshed.data.session?.access_token ?? undefined;
+      if (!accessToken) {
+        const retry = await supabase.auth.getSession();
+        accessToken = retry.data.session?.access_token ?? undefined;
+      }
+    }
+
     if (!accessToken) {
       return undefined;
     }
@@ -6354,6 +6363,12 @@ th{background:#f3f4f6}
     setDeletingUserAccount(true);
 
     const authHeaders = await getSupabaseAuthHeaders();
+    if (!authHeaders?.Authorization) {
+      setStatus("Tu sesion vencio. Cerra sesion y volve a entrar para desarmar el usuario.");
+      setDeletingUserAccount(false);
+      return;
+    }
+
     const response = await fetch("/api/account/delete", {
       method: "POST",
       headers: {
