@@ -8575,16 +8575,18 @@ th{background:#f3f4f6}
                   <button
                     type="button"
                     onClick={() => setShowMiLugWishlistPoolPanel(true)}
-                    className="h-12 w-40 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                    className="flex h-12 w-40 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
                   >
-                    {labels.poolWishlist}
+                    <Image src="/Icons/Icon_Wish.svg" alt="Wishlist" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
+                    <span className="truncate">{labels.poolWishlist}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowMiLugSalesPoolPanel(true)}
-                    className="h-12 w-40 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
+                    className="flex h-12 w-40 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800"
                   >
-                    {labels.poolSales}
+                    <Image src="/Icons/Icon_Ventas.svg" alt="Ventas" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
+                    <span className="truncate">{labels.poolSales}</span>
                   </button>
                 </div>
               </section>
@@ -8960,6 +8962,16 @@ th{background:#f3f4f6}
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-boogaloo text-xl text-slate-900">{labels.poolSales}</p>
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHideOwnPoolItems((prev) => !prev)}
+                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                        >
+                          <span>No mostrar mis items en el pool</span>
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm border border-slate-300 bg-white text-[11px] leading-none">
+                            {hideOwnPoolItems ? "✓" : ""}
+                          </span>
+                        </button>
                         <select
                           value={miLugSaleSort}
                           onChange={(event) => {
@@ -10803,7 +10815,8 @@ th{background:#f3f4f6}
                   className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                   title="Configuración personal"
                 >
-                  <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Image src="/Icons/Icon_PROFILE.svg" alt="Perfil" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
                     <p className="truncate text-base font-semibold text-slate-900">Configuración personal</p>
                   </div>
                 </button>
@@ -10827,7 +10840,8 @@ th{background:#f3f4f6}
                   className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                   title="Mensajes"
                 >
-                  <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Image src="/Icons/Icon_MENSAJES.svg" alt="Mensajes" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
                     <p className="truncate text-base font-semibold text-slate-900">Mensajes</p>
                   </div>
                 </button>
@@ -10841,9 +10855,12 @@ th{background:#f3f4f6}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                     title="Listas"
                   >
-                    <div className="min-w-0">
-                      <p className="truncate text-base font-semibold text-slate-900">Mis listas</p>
-                      <p className="text-sm text-slate-600">{`${totalListasCreated} listas creadas`}</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Image src="/Icons/Icon_LISTAS.svg" alt="Listas" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="truncate text-base font-semibold text-slate-900">Mis listas</p>
+                        <p className="text-sm text-slate-600">{`${totalListasCreated} listas creadas`}</p>
+                      </div>
                     </div>
                   </button>
                 ) : null}
@@ -10870,9 +10887,12 @@ th{background:#f3f4f6}
                     }}
                     className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-4 py-2 text-left"
                   >
-                    <div className="min-w-0">
-                      <p className="truncate text-base font-semibold text-slate-900">Mis minfiguras</p>
-                      <p className="text-sm text-slate-600">Colección y seguimiento de tus CMF</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Image src="/Icons/Icon_CMF.svg" alt="Minifiguras" width={40} height={40} unoptimized className="h-10 w-10 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="truncate text-base font-semibold text-slate-900">Mis minfiguras</p>
+                        <p className="text-sm text-slate-600">Colección y seguimiento de tus CMF</p>
+                      </div>
                     </div>
                   </button>
                 ) : null}
