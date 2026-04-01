@@ -357,7 +357,8 @@ function getSectionFromPath(pathname: string): AppSection | null {
 }
 
 const FACE_TOTAL = 20;
-const AUTO_MINIFIG_MISSING_LIST_NAME = "Faltantes de CMF";
+const AUTO_MINIFIG_MISSING_LIST_NAME = "Faltantes de minifiguras";
+const LEGACY_AUTO_MINIFIG_MISSING_LIST_NAME = "Faltantes de CMF";
 const DEFAULT_LOADING_PHRASES = [
   "Clasificando piezas",
   "Desarmando sets",
@@ -1537,13 +1538,25 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     () => partsSearchResults.find((part) => part.part_num === selectedSearchPartNum) ?? null,
     [partsSearchResults, selectedSearchPartNum],
   );
-  const listItemsPageSize = 20;
-  const listItemsMaxPage = useMemo(() => Math.max(1, Math.ceil(listItemsRows.length / listItemsPageSize)), [listItemsRows.length]);
+  const listItemsDisplayRows = useMemo(() => {
+    if (selectedListForItems?.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME) {
+      return listItemsRows;
+    }
+
+    return listItemsRows.flatMap((row) =>
+      Array.from({ length: Math.max(1, Number(row.quantity || 1)) }, () => ({
+        ...row,
+        quantity: 1,
+      })),
+    );
+  }, [listItemsRows, selectedListForItems?.nombre]);
+  const listItemsPageSize = selectedListForItems?.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? 5000 : 20;
+  const listItemsMaxPage = useMemo(() => Math.max(1, Math.ceil(listItemsDisplayRows.length / listItemsPageSize)), [listItemsDisplayRows.length, listItemsPageSize]);
   const listItemsCurrentPage = useMemo(() => Math.min(listItemsPage, listItemsMaxPage), [listItemsMaxPage, listItemsPage]);
   const listItemsVisibleRows = useMemo(() => {
     const from = Math.max(0, (listItemsCurrentPage - 1) * listItemsPageSize);
-    return listItemsRows.slice(from, from + listItemsPageSize);
-  }, [listItemsCurrentPage, listItemsRows]);
+    return listItemsDisplayRows.slice(from, from + listItemsPageSize);
+  }, [listItemsCurrentPage, listItemsDisplayRows, listItemsPageSize]);
   const colorOptions = useMemo(() => {
     return goBrickColors
       .map((color) => {
@@ -2266,6 +2279,65 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     setStatus("Secciones del dashboard actualizadas.");
   }
 
+  const ensureAutoMinifigMissingList = useCallback(async () => {
+    if (!supabase || !userId) {
+      return { listId: "" };
+    }
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("lists")
+      .select("list_id, name")
+      .eq("owner_id", userId)
+      .eq("list_type", "deseos")
+      .in("name", [AUTO_MINIFIG_MISSING_LIST_NAME, LEGACY_AUTO_MINIFIG_MISSING_LIST_NAME])
+      .order("created_at", { ascending: true });
+
+    if (existingError) {
+      setStatus(`${t.errorPrefix}: ${existingError.message}`);
+      return { listId: "" };
+    }
+
+    const existingIds = (existingRows ?? []).map((row) => String((row as { list_id?: unknown }).list_id ?? "").trim()).filter(Boolean);
+    const legacyIds = (existingRows ?? [])
+      .filter((row) => String((row as { name?: unknown }).name ?? "") === LEGACY_AUTO_MINIFIG_MISSING_LIST_NAME)
+      .map((row) => String((row as { list_id?: unknown }).list_id ?? "").trim())
+      .filter(Boolean);
+
+    let listId = existingIds[0] || "";
+    if (!listId) {
+      const { data: createdList, error: createError } = await supabase
+        .from("lists")
+        .insert({
+          owner_id: userId,
+          lug_id: currentLugId,
+          name: AUTO_MINIFIG_MISSING_LIST_NAME,
+          list_type: "deseos",
+          is_public: false,
+        })
+        .select("list_id")
+        .single();
+
+      if (createError || !createdList?.list_id) {
+        setStatus(`${t.errorPrefix}: ${createError?.message || "No se pudo crear la lista automatica de CMF."}`);
+        return { listId: "" };
+      }
+
+      listId = String(createdList.list_id);
+    }
+
+    if (legacyIds.length > 0) {
+      await supabase.from("lists").update({ name: AUTO_MINIFIG_MISSING_LIST_NAME }).in("list_id", legacyIds).eq("owner_id", userId);
+    }
+
+    if (existingIds.length > 1) {
+      const duplicateIds = existingIds.slice(1);
+      await supabase.from("list_items").update({ list_id: listId }).in("list_id", duplicateIds);
+      await supabase.from("lists").delete().in("list_id", duplicateIds).eq("owner_id", userId);
+    }
+
+    return { listId };
+  }, [currentLugId, supabase, t.errorPrefix, userId]);
+
   const loadListasFromDb = useCallback(async () => {
     if (!supabase || !userId) {
       setListasItems([]);
@@ -2274,10 +2346,11 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     setListasLoading(true);
+    const autoMissing = await ensureAutoMinifigMissingList();
 
     const { data, error } = await supabase
       .from("lists")
-      .select("list_id, name, list_type, is_public, list_items(quantity)")
+      .select("list_id, name, list_type, is_public")
       .eq("owner_id", userId)
       .order("created_at", { ascending: false });
 
@@ -2288,26 +2361,34 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     const rows = (data ?? []) as Array<Record<string, unknown>>;
-    const parsed = rows.map((row) => {
-      const items = Array.isArray(row.list_items) ? (row.list_items as Array<Record<string, unknown>>) : [];
-      const lotes = items.length;
-      const piezas = items.reduce((acc, item) => acc + Number(item.quantity ?? 0), 0);
+    const parsed = rows
+      .filter((row) => {
+        const rowId = String(row.list_id ?? "").trim();
+        const rowName = String(row.name ?? "").trim();
+        if (rowName !== AUTO_MINIFIG_MISSING_LIST_NAME) {
+          return true;
+        }
+        return rowId === autoMissing.listId;
+      })
+      .map((row) => {
+      const lotes = 0;
+      const piezas = 0;
 
-      return {
-        id: String(row.list_id ?? ""),
-        nombre: String(row.name ?? ""),
-        tipo: String(row.list_type ?? "deseos") === "venta" ? "venta" : "deseos",
-        piezas,
-        lotes,
-        visibilidad: Boolean(row.is_public) ? "publico" : "privado",
-      } as ListaItem;
-    });
+        return {
+          id: String(row.list_id ?? ""),
+          nombre: String(row.name ?? ""),
+          tipo: String(row.list_type ?? "deseos") === "venta" ? "venta" : "deseos",
+          piezas,
+          lotes,
+          visibilidad: Boolean(row.is_public) ? "publico" : "privado",
+        } as ListaItem;
+      });
 
     setListasItems(parsed);
     setDashboardListsCreatedCount(parsed.length);
     listasLastLoadedAtRef.current = Date.now();
     setListasLoading(false);
-  }, [supabase, t.errorPrefix, userId]);
+  }, [ensureAutoMinifigMissingList, supabase, t.errorPrefix, userId]);
 
   async function createListaItem() {
     if (!supabase || !userId) {
@@ -2322,13 +2403,25 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
     setListasSaving(true);
 
-    const { error } = await supabase.from("lists").insert({
+    await ensureProfile(userId, userEmail ?? null);
+
+    const payload = {
       owner_id: userId,
       lug_id: currentLugId,
       name: nombre,
       list_type: newListaTipo,
       is_public: false,
-    });
+    };
+
+    let { error } = await supabase.from("lists").insert(payload);
+    if (
+      error &&
+      (/violates foreign key constraint/i.test(error.message) || /owner_id/i.test(error.message) || /profiles/i.test(error.message))
+    ) {
+      await ensureProfile(userId, userEmail ?? null);
+      const retry = await supabase.from("lists").insert(payload);
+      error = retry.error;
+    }
 
     if (error) {
       setStatus(`${t.errorPrefix}: ${error.message}`);
@@ -2724,20 +2817,6 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
   const checkedMinifigSeriesIds = useMemo(
     () => Object.entries(minifigSeriesCheckedById).filter(([, checked]) => checked).map(([id]) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
     [minifigSeriesCheckedById],
-  );
-  const minifigContextFigureSetNums = useMemo(() => {
-    if (minifigSearchQuery.trim().length > 0) {
-      return Array.from(new Set(minifigSearchResults.map((fig) => fig.set_num).filter(Boolean)));
-    }
-
-    const setNums = checkedMinifigSeriesIds.flatMap((seriesId) =>
-      (minifigFiguresBySeriesId[seriesId] ?? []).map((fig) => fig.set_num).filter(Boolean),
-    );
-    return Array.from(new Set(setNums));
-  }, [checkedMinifigSeriesIds, minifigFiguresBySeriesId, minifigSearchQuery, minifigSearchResults]);
-  const minifigContextMissingSetNums = useMemo(
-    () => minifigContextFigureSetNums.filter((setNum) => Boolean(minifigSetHasMissingPartsBySetNum[setNum])),
-    [minifigContextFigureSetNums, minifigSetHasMissingPartsBySetNum],
   );
   const popupVisibleSeriesRows = useMemo(
     () => (showOnlyFavoriteSeries ? minifigSeriesRows.filter((series) => Boolean(minifigSeriesFavoriteById[series.id])) : minifigSeriesRows),
@@ -3429,43 +3508,40 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     [getSupabaseAuthHeaders, supabase, t.errorPrefix, userId],
   );
 
-  const syncAutoMinifigMissingWishlist = useCallback(async (setNumsForSync?: string[]) => {
+  const syncAutoMinifigMissingWishlist = useCallback(async () => {
     if (!supabase || !userId) {
       return;
     }
 
     setMinifigMissingWishlistSyncing(true);
+    const fallbackUsername = String(userEmail ?? "usuario").split("@")[0] || "usuario";
+    await supabase.from("profiles").upsert({ id: userId, username: fallbackUsername }, { onConflict: "id" });
 
     try {
-      const aggregate = new Map<string, { part_num: string; part_name: string; color_name: string; quantity: number }>();
+      const [{ data: inventorySetRows, error: inventorySetError }, { data: partSetRows, error: partSetError }] = await Promise.all([
+        supabase.from("minifig_user_inventory").select("set_num").eq("user_id", userId),
+        supabase.from("minifig_user_part_inventory").select("set_num").eq("user_id", userId),
+      ]);
 
-      let targetSetNums = Array.from(new Set((setNumsForSync ?? []).map((setNum) => String(setNum).trim()).filter(Boolean)));
-      if (targetSetNums.length === 0) {
-        const [{ data: ownedSetRows, error: ownedSetError }, { data: partSetRows, error: partSetError }] = await Promise.all([
-          supabase.from("minifig_user_inventory").select("set_num").eq("user_id", userId).eq("is_owned", true),
-          supabase.from("minifig_user_part_inventory").select("set_num").eq("user_id", userId),
-        ]);
-
-        if (ownedSetError) {
-          setStatus(`${t.errorPrefix}: ${ownedSetError.message}`);
-          setMinifigMissingWishlistSyncing(false);
-          return;
-        }
-
-        if (partSetError) {
-          setStatus(`${t.errorPrefix}: ${partSetError.message}`);
-          setMinifigMissingWishlistSyncing(false);
-          return;
-        }
-
-        targetSetNums = Array.from(
-          new Set(
-            [...(ownedSetRows ?? []), ...(partSetRows ?? [])]
-              .map((row) => String((row as { set_num?: unknown }).set_num ?? "").trim())
-              .filter(Boolean),
-          ),
-        );
+      if (inventorySetError) {
+        setStatus(`${t.errorPrefix}: ${inventorySetError.message}`);
+        setMinifigMissingWishlistSyncing(false);
+        return;
       }
+
+      if (partSetError) {
+        setStatus(`${t.errorPrefix}: ${partSetError.message}`);
+        setMinifigMissingWishlistSyncing(false);
+        return;
+      }
+
+      const targetSetNums = Array.from(
+        new Set(
+          [...(inventorySetRows ?? []), ...(partSetRows ?? [])]
+            .map((row) => String((row as { set_num?: unknown }).set_num ?? "").trim())
+            .filter(Boolean),
+        ),
+      );
 
       const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(targetSetNums);
       if (missingAnalysis.hadError) {
@@ -3473,72 +3549,41 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
         return;
       }
 
-      for (const row of missingAnalysis.missingRows) {
-        const aggregateKey = `${row.part_num}::${row.color_name}`;
-        const current = aggregate.get(aggregateKey);
-        if (current) {
-          current.quantity += row.missing_quantity;
-        } else {
-          aggregate.set(aggregateKey, {
-            part_num: row.part_num,
-            part_name: row.part_name || row.part_num,
-            color_name: row.color_name,
-            quantity: row.missing_quantity,
-          });
-        }
-      }
-
-      const missingRows = Array.from(aggregate.values()).filter((row) => row.quantity > 0);
-      const { data: existingList } = await supabase
-        .from("lists")
-        .select("list_id")
-        .eq("owner_id", userId)
-        .eq("list_type", "deseos")
-        .eq("name", AUTO_MINIFIG_MISSING_LIST_NAME)
-        .maybeSingle();
-
-      if (missingRows.length === 0) {
-        if (existingList?.list_id) {
-          await supabase.from("lists").delete().eq("list_id", String(existingList.list_id)).eq("owner_id", userId);
-          await loadListasFromDb();
-        }
+      const missingRows = missingAnalysis.missingRows
+        .map((row) => ({
+          set_num: row.set_num,
+          part_num: row.part_num,
+          part_name: row.part_name || row.part_num,
+          color_name: row.color_name,
+          quantity: Math.max(0, Number(row.missing_quantity ?? 0) || 0),
+        }))
+        .filter((row) => row.quantity > 0);
+      const autoMissing = await ensureAutoMinifigMissingList();
+      const listId = autoMissing.listId;
+      if (!listId) {
         setMinifigMissingWishlistSyncing(false);
         return;
       }
 
-      let listId = String(existingList?.list_id ?? "").trim();
-      if (!listId) {
-        const { data: createdList, error: createListError } = await supabase
-          .from("lists")
-          .insert({
-            owner_id: userId,
-            lug_id: currentLugId,
-            name: AUTO_MINIFIG_MISSING_LIST_NAME,
-            list_type: "deseos",
-            is_public: false,
-          })
-          .select("list_id")
-          .single();
-
-        if (createListError || !createdList?.list_id) {
-          setStatus(`${t.errorPrefix}: ${createListError?.message || "No se pudo crear la lista"}`);
-          setMinifigMissingWishlistSyncing(false);
-          return;
-        }
-
-        listId = String(createdList.list_id);
+      if (missingRows.length === 0) {
+        await supabase.from("list_items").delete().eq("list_id", listId);
+        await loadListasFromDb();
+        setMinifigMissingWishlistSyncing(false);
+        return;
       }
 
       await supabase.from("list_items").delete().eq("list_id", listId);
 
-      const payloadItems = missingRows.map((row) => ({
-        list_id: listId,
-        part_num: row.part_num,
-        part_name: row.part_name,
-        color_name: row.color_name ? `BrickLink: ${row.color_name}` : null,
-        imgmatchcolor: true,
-        quantity: row.quantity,
-      }));
+      const payloadItems = missingRows.flatMap((row) =>
+        Array.from({ length: Math.max(1, Number(row.quantity || 1)) }, () => ({
+          list_id: listId,
+          part_num: row.part_num,
+          part_name: `${row.part_name} (${row.set_num})`,
+          color_name: row.color_name ? `BrickLink: ${row.color_name}` : null,
+          imgmatchcolor: true,
+          quantity: 1,
+        })),
+      );
 
       const { error: insertError } = await supabase.from("list_items").insert(payloadItems);
       if (insertError) {
@@ -3553,7 +3598,7 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     }
 
     setMinifigMissingWishlistSyncing(false);
-  }, [currentLugId, loadListasFromDb, loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userId]);
+  }, [ensureAutoMinifigMissingList, loadListasFromDb, loadMinifigMissingAnalysisBySetNums, supabase, t.errorPrefix, userEmail, userId]);
 
   const openMinifigurasSection = useCallback(async (options?: { navigate?: boolean }) => {
     if (options?.navigate !== false) {
@@ -3565,7 +3610,10 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
     if (shouldRefreshSeries) {
       await loadCollectibleSeries();
     }
-  }, [loadCollectibleSeries, minifigSeriesRows.length, navigateSectionClient]);
+    if (!minifigMissingWishlistSyncing) {
+      void syncAutoMinifigMissingWishlist();
+    }
+  }, [loadCollectibleSeries, minifigMissingWishlistSyncing, minifigSeriesRows.length, navigateSectionClient, syncAutoMinifigMissingWishlist]);
 
   const loadListItems = useCallback(
     async (listId: string) => {
@@ -3574,6 +3622,125 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
       }
 
       setListItemsLoading(true);
+
+      if (selectedListForItems?.nombre === AUTO_MINIFIG_MISSING_LIST_NAME) {
+        const [{ data: inventorySetRows, error: inventorySetError }, { data: partSetRows, error: partSetError }] = await Promise.all([
+          supabase.from("minifig_user_inventory").select("set_num").eq("user_id", userId),
+          supabase.from("minifig_user_part_inventory").select("set_num").eq("user_id", userId),
+        ]);
+
+        if (inventorySetError || partSetError) {
+          setStatus(`${t.errorPrefix}: ${inventorySetError?.message || partSetError?.message || "No se pudieron cargar faltantes de minifiguras."}`);
+          setListItemsRows([]);
+          setItemQuantityInputs({});
+          setItemPriceInputs({});
+          setListItemOffersById({});
+          setListItemsLoading(false);
+          return;
+        }
+
+        const targetSetNums = Array.from(
+          new Set(
+            [...(inventorySetRows ?? []), ...(partSetRows ?? [])]
+              .map((row) => String((row as { set_num?: unknown }).set_num ?? "").trim())
+              .filter(Boolean),
+          ),
+        );
+
+        const missingAnalysis = await loadMinifigMissingAnalysisBySetNums(targetSetNums);
+        if (missingAnalysis.hadError) {
+          setListItemsRows([]);
+          setItemQuantityInputs({});
+          setItemPriceInputs({});
+          setListItemOffersById({});
+          setListItemsLoading(false);
+          return;
+        }
+
+        const expandedRows = missingAnalysis.missingRows.flatMap((row, rowIndex) => {
+          const qty = Math.max(1, Number(row.missing_quantity ?? 1) || 1);
+          return Array.from({ length: qty }, (_, itemIndex) => ({
+            item_id: `auto-missing-${row.set_num}-${row.part_num}-${row.color_name}-${rowIndex}-${itemIndex}`,
+            part_num: row.part_num,
+            part_name: `${row.part_name || row.part_num} (${row.set_num})`,
+            color_name: row.color_name ? `BrickLink: ${row.color_name}` : null,
+            display_color_label: row.color_name || null,
+            imgmatchcolor: true,
+            part_img_url: null,
+            quantity: 1,
+            value: null,
+          }));
+        });
+
+        const partNums = Array.from(new Set(expandedRows.map((item) => item.part_num).filter((item): item is string => Boolean(item))));
+        const catalogImageByPartNum = new Map<string, string | null>();
+        const colorRowsByPartNum = new Map<string, Array<{ color_name: string; part_img_url: string | null }>>();
+
+        if (partNums.length > 0) {
+          const [{ data: partsData }, { data: colorData }] = await Promise.all([
+            supabase.from("parts_catalog").select("part_num, part_img_url").in("part_num", partNums),
+            supabase.from("part_color_catalog").select("part_num, color_name, part_img_url").in("part_num", partNums),
+          ]);
+
+          (partsData ?? []).forEach((row) => {
+            const key = String(row.part_num ?? "");
+            if (!key) {
+              return;
+            }
+            catalogImageByPartNum.set(key, row.part_img_url ? String(row.part_img_url) : null);
+          });
+
+          (colorData ?? []).forEach((row) => {
+            const key = String(row.part_num ?? "");
+            const colorName = String(row.color_name ?? "").trim();
+            if (!key || !colorName) {
+              return;
+            }
+            if (!colorRowsByPartNum.has(key)) {
+              colorRowsByPartNum.set(key, []);
+            }
+            colorRowsByPartNum.get(key)?.push({
+              color_name: colorName,
+              part_img_url: row.part_img_url ? String(row.part_img_url) : null,
+            });
+          });
+        }
+
+        const resolvedRows = expandedRows.map((item) => {
+          const partNum = item.part_num;
+          const colorLabel = item.display_color_label;
+          const colorRows = partNum ? (colorRowsByPartNum.get(partNum) ?? []) : [];
+          let colorImageUrl: string | null = null;
+
+          if (colorLabel) {
+            const target = normalizeColorLabel(colorLabel);
+            const exact = colorRows.find((row) => normalizeColorLabel(row.color_name) === target);
+            if (exact?.part_img_url) {
+              colorImageUrl = exact.part_img_url;
+            } else {
+              const partial = colorRows.find((row) => {
+                const current = normalizeColorLabel(row.color_name);
+                return current.includes(target) || target.includes(current);
+              });
+              colorImageUrl = partial?.part_img_url ?? null;
+            }
+          }
+
+          const baseImage = partNum ? (catalogImageByPartNum.get(partNum) ?? null) : null;
+          return {
+            ...item,
+            part_img_url: colorImageUrl || baseImage,
+            imgmatchcolor: colorLabel ? Boolean(colorImageUrl) : true,
+          };
+        });
+
+        setListItemsRows(resolvedRows);
+        setItemQuantityInputs({});
+        setItemPriceInputs({});
+        setListItemOffersById({});
+        setListItemsLoading(false);
+        return;
+      }
 
       const listItemsWithValueAndImage = await supabase
         .from("list_items")
@@ -3753,7 +3920,16 @@ export default function Home({ initialSection, initialListId }: HomeProps = {}) 
 
       setListItemsLoading(false);
     },
-    [fetchCurrentLugMemberNamesByIds, fetchProfileNamesByIds, labels.noNameFallback, supabase, t.errorPrefix, userId],
+    [
+      fetchCurrentLugMemberNamesByIds,
+      fetchProfileNamesByIds,
+      labels.noNameFallback,
+      loadMinifigMissingAnalysisBySetNums,
+      selectedListForItems?.nombre,
+      supabase,
+      t.errorPrefix,
+      userId,
+    ],
   );
 
   const loadMiLugPools = useCallback(async () => {
@@ -4277,9 +4453,12 @@ th{background:#f3f4f6}
       if (goBrickColors.length === 0) {
         await loadGoBrickColors();
       }
+      if (lista.nombre === AUTO_MINIFIG_MISSING_LIST_NAME) {
+        await syncAutoMinifigMissingWishlist();
+      }
       await loadListItems(lista.id);
     },
-    [goBrickColors.length, loadGoBrickColors, loadListItems, loadPartsCategories, partsCategories.length, router],
+    [goBrickColors.length, loadGoBrickColors, loadListItems, loadPartsCategories, partsCategories.length, router, syncAutoMinifigMissingWishlist],
   );
 
   const openListDetailById = useCallback(
@@ -5212,6 +5391,7 @@ th{background:#f3f4f6}
     }
 
     await ensureProfile(currentUserId, currentEmail);
+    await ensureAutoMinifigMissingList();
 
     const { data, error } = await supabase.rpc("get_dashboard_bootstrap");
 
@@ -5260,7 +5440,7 @@ th{background:#f3f4f6}
         window.localStorage.setItem("ui_language", lang);
       }
     }
-  }, [ensureProfile, supabase, t.errorPrefix]);
+  }, [ensureAutoMinifigMissingList, ensureProfile, supabase, t.errorPrefix]);
 
   useEffect(() => {
     if (!supabase) {
@@ -5528,20 +5708,16 @@ th{background:#f3f4f6}
       return;
     }
 
-    if (minifigSeriesRows.length === 0) {
-      return;
-    }
-
     const debounceHandle = window.setTimeout(() => {
       if (!minifigMissingWishlistSyncing) {
-        void syncAutoMinifigMissingWishlist(minifigContextMissingSetNums);
+        void syncAutoMinifigMissingWishlist();
       }
     }, 500);
 
     return () => {
       window.clearTimeout(debounceHandle);
     };
-  }, [activeSection, minifigContextMissingSetNums, minifigMissingWishlistSyncing, minifigSeriesRows.length, minifigSetHasMissingPartsBySetNum, supabase, syncAutoMinifigMissingWishlist, userId]);
+  }, [activeSection, minifigMissingWishlistSyncing, supabase, syncAutoMinifigMissingWishlist, userId]);
 
   useEffect(() => {
     if (!supabase || !showMemberChatPopup || !selectedMemberChat?.roomId) {
@@ -6932,7 +7108,7 @@ th{background:#f3f4f6}
       .from("profiles")
       .update({
         current_lug_id: lugId,
-        rol_lug: "common",
+        rol_lug: "admin",
       })
       .eq("id", userId);
 
@@ -6956,12 +7132,12 @@ th{background:#f3f4f6}
 
     setCurrentLugId(lugId);
     setSettingsLugId(lugId);
-    setRolLug("common");
+    setRolLug("admin");
     await loadCurrentLugPalette(lugId);
     await loadMyJoinRequests(userId);
     await loadMasterLugs();
     setRequestActionLoadingLugId(null);
-    setStatus(`Ingresaste directo a ${lugName}.`);
+    setStatus(`Ingresaste directo a ${lugName} como admin.`);
   }
 
   function canDirectJoinLug(lug: MasterLugItem) {
@@ -7632,8 +7808,10 @@ th{background:#f3f4f6}
     if (activeSection === "lista_detalle" && selectedListForItems) {
       const listTypeLabel = selectedListForItems.tipo === "deseos" ? labels.wishlistListType : labels.saleListType;
       const visibilityLabel = selectedListForItems.visibilidad === "publico" ? labels.public : labels.private;
-      const totalLotes = listItemsRows.length;
-      const totalPiezas = listItemsRows.reduce((acc, row) => acc + Math.max(0, Number(row.quantity) || 0), 0);
+      const totalLotes = selectedListForItems.nombre === AUTO_MINIFIG_MISSING_LIST_NAME ? listItemsDisplayRows.length : listItemsRows.length;
+      const totalPiezas = selectedListForItems.nombre === AUTO_MINIFIG_MISSING_LIST_NAME
+        ? listItemsDisplayRows.length
+        : listItemsRows.reduce((acc, row) => acc + Math.max(0, Number(row.quantity) || 0), 0);
 
       return (
         <main className="bg-lego-tile min-h-screen px-4 py-6 sm:px-6 sm:py-8">
@@ -7661,6 +7839,7 @@ th{background:#f3f4f6}
                 <div className="mt-3 h-[5px] w-full rounded-full" style={{ backgroundColor: currentLugColor2 || "#ffffff" }} />
               </header>
 
+              {selectedListForItems.nombre !== AUTO_MINIFIG_MISSING_LIST_NAME ? (
               <section className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-3 sm:p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="font-boogaloo text-2xl font-semibold text-slate-900">{labels.addItem}</p>
@@ -7911,6 +8090,7 @@ th{background:#f3f4f6}
                 </div>
 
               </section>
+              ) : null}
 
               <div className="mt-3">
                 <button
@@ -7951,8 +8131,8 @@ th{background:#f3f4f6}
                     {listItemsRows.length === 0 ? (
                       <p className="text-sm text-slate-500">{labels.listHasNoPartsYet}</p>
                     ) : (
-                      listItemsVisibleRows.map((row) => (
-                        <div key={row.item_id} className="rounded-md border border-slate-200 px-2 py-2">
+                      listItemsVisibleRows.map((row, rowIndex) => (
+                        <div key={`${row.item_id}-${rowIndex}`} className="rounded-md border border-slate-200 px-2 py-2">
                           <div className="flex items-start gap-2">
                             <div
                               className={`relative flex h-[64px] w-[64px] items-center justify-center overflow-hidden rounded-md border bg-white ${
@@ -8023,6 +8203,7 @@ th{background:#f3f4f6}
                                   type="number"
                                   min={1}
                                   value={itemQuantityInputs[row.item_id] ?? String(row.quantity)}
+                                  disabled={selectedListForItems?.nombre === AUTO_MINIFIG_MISSING_LIST_NAME}
                                   onChange={(event) => {
                                     const raw = event.target.value;
                                     setItemQuantityInputs((prev) => ({ ...prev, [row.item_id]: raw }));
@@ -8033,7 +8214,7 @@ th{background:#f3f4f6}
                                       void saveListItemQuantity(row.item_id);
                                     }
                                   }}
-                                  className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                  className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs disabled:bg-slate-100 disabled:text-slate-500"
                                 />
 
                                 {selectedListForItems?.tipo === "venta" ? (
@@ -8158,7 +8339,6 @@ th{background:#f3f4f6}
               </div>
             </div>
           ) : null}
-
           {showCategoriesPanel ? (
             <div
               className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 p-4"
